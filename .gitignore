@@ -1,3 +1,69 @@
-
+# ==============================
+# .NET / COMPILACIÓN
+# ==============================
 **/bin/
 **/obj/
+**/TestResults/
+.vs/
+**/.vs/
+*.user
+*.suo
+*.cache
+
+# ==============================
+# IDE / EDITORES
+# ==============================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ==============================
+# VARIABLES DE ENTORNO
+# ==============================
+.env
+.env.*
+!.env.example
+
+# ==============================
+# CREDENCIALES / CERTIFICADOS
+# ==============================
+*.key
+*.pem
+*.pfx
+*.p12
+*.session
+*.credential
+.secrets/
+**/credentials/
+**/sessions/
+
+# ==============================
+# BASES DE DATOS LOCALES
+# ==============================
+*.db*
+*.sqlite
+*.sqlite3
+
+# ==============================
+# ARCHIVOS GENERADOS
+# ==============================
+**/storage/
+**/downloads/
+**/playwright-report/
+**/test-results/
+**/blob-report/
+
+# ==============================
+# LOGS
+# ==============================
+*.log
+logs/
+**/logs/
+
+# ==============================
+# SISTEMA OPERATIVO
+# ==============================
+.DS_Store
+Thumbs.db
+desktop.ini

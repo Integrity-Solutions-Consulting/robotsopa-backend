@@ -1,0 +1,9 @@
+{
+  "url": "https://srienlinea.sri.gob.ec/comprobantes-electronicos-internet/pages/consultas/menu.jsf",
+  "verified": false,
+  "verifiedAt": null,
+  "evidence": "Pendiente de inspección de la sesión autorizada. No hay selectores de producción inventados.",
+  "maxAutomaticDays": 31,
+  "maxDocuments": 10,
+  "minQueryIntervalMs": 3000
+}

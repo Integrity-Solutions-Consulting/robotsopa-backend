@@ -1,0 +1,12 @@
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+COPY . .
+RUN dotnet publish src/SriAutomation.Worker -c Release -o /out
+FROM mcr.microsoft.com/dotnet/runtime:10.0-noble
+WORKDIR /app
+COPY --from=build /out/.playwright /app/.playwright
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
+RUN /app/.playwright/node/linux-x64/node /app/.playwright/package/cli.js install --with-deps chromium
+COPY --from=build /out .
+HEALTHCHECK --interval=15s --timeout=5s --start-period=30s CMD ["dotnet", "SriAutomation.Worker.dll", "--health"]
+ENTRYPOINT ["dotnet", "SriAutomation.Worker.dll"]

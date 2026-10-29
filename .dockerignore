@@ -1,0 +1,17 @@
+**/bin
+**/obj
+TestResults
+.git
+.env*
+*.key
+*.pem
+*.pfx
+*.p12
+*.db*
+*.session
+*.credential
+.secrets
+storage
+downloads
+sessions
+credentials

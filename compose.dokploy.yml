@@ -1,0 +1,77 @@
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SRI_OUTPUT_PATH: /app/downloads
+      SRI_STATE_PATH: /app/storage
+      SRI_SESSION_PATH: /app/sessions
+      SRI_CREDENTIAL_PATH: /app/credentials
+      SRI_PORTAL_PROFILE: /app/config/sri-portal.json
+      SRI_AGENT_KEY_FILE: /run/secrets/agent-key
+      SRI_CREDENTIAL_KEY_FILE: /run/secrets/credential-key
+      SRI_ADMIN_USERNAME: ${SRI_ADMIN_USERNAME:?Configure SRI_ADMIN_USERNAME}
+      SRI_ADMIN_PASSWORD: ${SRI_ADMIN_PASSWORD:?Configure SRI_ADMIN_PASSWORD}
+      SRI_COOKIE_SECURE: "true"
+    volumes:
+      - state:/app/storage
+      - downloads:/app/downloads
+      - sessions:/app/sessions
+      - credentials:/app/credentials
+      - type: bind
+        source: ${SRI_CONFIG_DIR:?Configure SRI_CONFIG_DIR}
+        target: /app/config
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${SRI_SECRET_DIR:?Configure SRI_SECRET_DIR}/agent.key
+        target: /run/secrets/agent-key
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${SRI_SECRET_DIR}/credential.key
+        target: /run/secrets/credential-key
+        read_only: true
+        bind: { create_host_path: false }
+    networks:
+      sri-shared:
+        aliases: [botsopa-sri-api]
+    restart: unless-stopped
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    environment:
+      SRI_WORKER_PAUSED: ${SRI_WORKER_PAUSED:-true}
+      SRI_OUTPUT_PATH: /app/downloads
+      SRI_STATE_PATH: /app/storage
+      SRI_SESSION_PATH: /app/sessions
+      SRI_PORTAL_PROFILE: /app/config/sri-portal.json
+      SRI_SESSION_KEY_FILE: /run/secrets/session-key
+    volumes:
+      - state:/app/storage
+      - downloads:/app/downloads
+      - sessions:/app/sessions
+      - type: bind
+        source: ${SRI_CONFIG_DIR:?Configure SRI_CONFIG_DIR}
+        target: /app/config
+        read_only: true
+        bind: { create_host_path: false }
+      - type: bind
+        source: ${SRI_SECRET_DIR:?Configure SRI_SECRET_DIR}/session.key
+        target: /run/secrets/session-key
+        read_only: true
+        bind: { create_host_path: false }
+    init: true
+    shm_size: 1gb
+    restart: unless-stopped
+volumes:
+  state:
+  downloads:
+  sessions:
+  credentials:
+networks:
+  sri-shared:
+    external: true
+    name: botsopa-sri-network
