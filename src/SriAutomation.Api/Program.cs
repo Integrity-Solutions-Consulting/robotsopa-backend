@@ -20,7 +20,10 @@ builder.Services.AddSingleton<IDocumentParser, XmlDocumentParser>();
 builder.Services.AddEndpointsApiExplorer(); builder.Services.AddSwaggerGen(); builder.Services.AddHealthChecks().AddCheck<SriAutomation.Api.StorageHealthCheck>("storage");
 builder.Services.AddRateLimiter(o => o.AddFixedWindowLimiter("login", x => { x.PermitLimit = 10; x.Window = TimeSpan.FromMinutes(1); x.QueueLimit = 0; }));
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20_000_000);
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 var app = builder.Build();
+app.UseCors();
 var database = new PanelDatabase(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage"));
 database.Initialize("Cristopher", password);
 database.SyncAudit(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Audit.ToList()));
@@ -38,7 +41,7 @@ app.Use(async (context, next) =>
                 await next(); return;
             }
             if (context.Request.Method is not "GET" and not "HEAD" && context.Request.Headers.Origin.FirstOrDefault() is { } origin &&
-                (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || uri.Authority != context.Request.Host.Value)) { context.Response.StatusCode = 403; return; }
+                (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || (uri.Authority != context.Request.Host.Value && !allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase)))) { context.Response.StatusCode = 403; return; }
             if (context.Request.Path != "/api/v1/auth/login")
             {
                 var token = context.Request.Cookies["sri-session"];
@@ -74,7 +77,7 @@ api.MapPost("/auth/login", (Login login, HttpContext c) =>
     if (identity is null) return Results.Unauthorized();
     foreach (var expired in sessions.Where(s => s.Value.Expiry <= DateTimeOffset.UtcNow)) sessions.TryRemove(expired.Key, out _);
     var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)); sessions[token] = (DateTimeOffset.UtcNow.AddHours(8), identity.Value.User, identity.Value.Role, identity.Value.MustChange);
-    c.Response.Cookies.Append("sri-session", token, new CookieOptions { HttpOnly = true, SameSite = SameSiteMode.Strict, Secure = secureCookie || c.Request.IsHttps, MaxAge = TimeSpan.FromHours(8), Path = "/" });
+    c.Response.Cookies.Append("sri-session", token, new CookieOptions { HttpOnly = true, SameSite = secureCookie ? SameSiteMode.None : SameSiteMode.Strict, Secure = secureCookie || c.Request.IsHttps, MaxAge = TimeSpan.FromHours(8), Path = "/" });
     c.Items["PanelUser"] = identity.Value.User;
     return Results.Ok(new { authenticated = true, user = identity.Value.User, role = identity.Value.Role, mustChange = identity.Value.MustChange });
 }).RequireRateLimiting("login");
@@ -86,7 +89,7 @@ api.MapPost("/auth/change-password", (PasswordChange change, HttpContext c) => {
     sessions[token]=(old.Expiry,old.User,old.Role,false);
     return Results.Ok(new { changed=true });
 }).RequireRateLimiting("login");
-api.MapPost("/auth/logout", (HttpContext c) => { if (c.Request.Cookies["sri-session"] is { } token) sessions.TryRemove(token, out _); c.Response.Cookies.Delete("sri-session"); return Results.NoContent(); });
+api.MapPost("/auth/logout", (HttpContext c) => { if (c.Request.Cookies["sri-session"] is { } token) sessions.TryRemove(token, out _); c.Response.Cookies.Delete("sri-session", new CookieOptions { Path = "/", SameSite = secureCookie ? SameSiteMode.None : SameSiteMode.Strict, Secure = secureCookie || c.Request.IsHttps }); return Results.NoContent(); });
 api.MapGet("/users", (HttpContext c) => c.Items["PanelRole"] as string == "admin" ? Results.Ok(database.ListUsers()) : Results.StatusCode(403));
 api.MapPost("/users", (PanelUserRequest request, HttpContext c) => {
     if (c.Items["PanelRole"] as string != "admin") return Results.StatusCode(403);

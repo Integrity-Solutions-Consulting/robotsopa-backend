@@ -1,0 +1,16 @@
+# Configuración cuando se ejecuta solo la imagen Dockerfile de la API.
+# Para el despliegue API + worker use .env.example y compose.dokploy.yml.
+ASPNETCORE_ENVIRONMENT=Production
+ASPNETCORE_URLS=http://+:8080
+Cors__AllowedOrigins__0=https://app.midominio.com
+SRI_COOKIE_SECURE=true
+SRI_ADMIN_USERNAME=admin
+SRI_ADMIN_PASSWORD=CAMBIAR_POR_UNA_CLAVE_UNICA_DE_AL_MENOS_16_CARACTERES
+SRI_STATE_PATH=/app/storage
+SRI_OUTPUT_PATH=/app/downloads
+SRI_SESSION_PATH=/app/sessions
+SRI_CREDENTIAL_PATH=/app/credentials
+SRI_PORTAL_PROFILE=/app/config/sri-portal.json
+SRI_AGENT_KEY_FILE=/run/secrets/agent-key
+SRI_CREDENTIAL_KEY_FILE=/run/secrets/credential-key
+# Monte estos directorios y archivos en las rutas indicadas. No exponga los secretos.
