@@ -61,7 +61,7 @@ app.Use(async (context, next) =>
     catch (Exception ex) { app.Logger.LogError("Error interno de tipo {Type}", ex.GetType().Name); await Results.Problem("Error interno.", statusCode: 500).ExecuteAsync(context); }
     finally { AuditEndpoints.RecordRequest(context, app.Services.GetRequiredService<IStateRepository>()); }
 });
-app.UseRateLimiter(); app.UseSwagger(); app.UseSwaggerUI(); app.MapHealthChecks("/health");
+app.UseRateLimiter(); if (app.Environment.IsDevelopment()) { app.UseSwagger(); app.UseSwaggerUI(); } app.MapHealthChecks("/health");
 app.Services.GetRequiredService<IStateRepository>().Update(s => { DataScope.MarkLegacyFixtures(s);
 if(s.AuthenticationMode!="EncryptedProfilesV4") {
  foreach(var op in s.Authentications){op.SessionVerified=false;op.Expires=null;op.Command="";op.Status="Cancelled";op.BrowserOpened=false;}
