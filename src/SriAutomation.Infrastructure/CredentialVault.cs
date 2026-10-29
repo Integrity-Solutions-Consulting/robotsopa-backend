@@ -16,7 +16,7 @@ public sealed class CredentialVault(string directory,string keyFile)
     public void Save(string account,string taxId,string password)
     {
         if(taxId.Length!=13||!taxId.All(char.IsAsciiDigit)||string.IsNullOrWhiteSpace(password)||password.Length>1024)throw new ArgumentException("RUC o contraseña inválidos.");
-        Directory.CreateDirectory(directory);var key=File.ReadAllBytes(keyFile);var plain=Encoding.UTF8.GetBytes(password);var nonce=RandomNumberGenerator.GetBytes(12);var tag=new byte[16];var cipher=new byte[plain.Length];var temp=PathFor(account)+"."+Guid.NewGuid().ToString("N")+".tmp";
+        Directory.CreateDirectory(directory);var key=EncryptionKey.Read("SRI_CREDENTIAL_KEY_BASE64",keyFile);var plain=Encoding.UTF8.GetBytes(password);var nonce=RandomNumberGenerator.GetBytes(12);var tag=new byte[16];var cipher=new byte[plain.Length];var temp=PathFor(account)+"."+Guid.NewGuid().ToString("N")+".tmp";
         try{
             if(key.Length!=32)throw new InvalidDataException("Clave de cifrado inválida.");
             using var aes=new AesGcm(key,16);aes.Encrypt(nonce,plain,cipher,tag,Aad(account,taxId));
@@ -25,7 +25,7 @@ public sealed class CredentialVault(string directory,string keyFile)
     }
     public async Task Use(string account,string taxId,Func<string,Task> action)
     {
-        var data=Read(account);var key=File.ReadAllBytes(keyFile);var cipher=Convert.FromBase64String(data.Cipher);var plain=new byte[cipher.Length];
+        var data=Read(account);var key=EncryptionKey.Read("SRI_CREDENTIAL_KEY_BASE64",keyFile);var cipher=Convert.FromBase64String(data.Cipher);var plain=new byte[cipher.Length];
         try{if(data.Version!=1||key.Length!=32)throw new InvalidDataException("Credencial cifrada incompatible.");using var aes=new AesGcm(key,16);aes.Decrypt(Convert.FromBase64String(data.Nonce),cipher,Convert.FromBase64String(data.Tag),plain,Aad(account,taxId));await action(Encoding.UTF8.GetString(plain));}
         catch(CryptographicException){throw new InvalidDataException("No se pudo verificar la credencial cifrada. Actualícela desde Configuración.");}
         finally{CryptographicOperations.ZeroMemory(key);CryptographicOperations.ZeroMemory(plain);}

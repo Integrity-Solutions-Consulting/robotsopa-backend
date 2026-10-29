@@ -36,6 +36,7 @@ if (string.Equals(Environment.GetEnvironmentVariable("SRI_WORKER_PAUSED"), "true
     await builder.Build().RunAsync();
     return;
 }
+EncryptionKey.Validate("SRI_SESSION_KEY_BASE64", Environment.GetEnvironmentVariable("SRI_SESSION_KEY_FILE") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SRI-Automation", "secrets", "session.key"));
 builder.Services.AddSingleton(new WorkerSettings(statePath));
 var repository = new JsonStateRepository(statePath);
 var provider = new DocumentStorage(Environment.GetEnvironmentVariable("SRI_OUTPUT_PATH")!,()=>repository.Read(s=>s.Settings.DownloadSubfolder));

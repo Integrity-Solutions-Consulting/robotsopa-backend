@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using SriAutomation.Application;
+using SriAutomation.Infrastructure;
 
 namespace SriAutomation.Automation;
 
@@ -12,7 +13,7 @@ public sealed class SessionVault(string directory, string keyFile)
     public void Save(SessionData data)
     {
         Directory.CreateDirectory(directory);
-        var plain = JsonSerializer.SerializeToUtf8Bytes(data); var key = File.ReadAllBytes(keyFile);
+        var plain = JsonSerializer.SerializeToUtf8Bytes(data); var key = EncryptionKey.Read("SRI_SESSION_KEY_BASE64", keyFile);
         if (key.Length != 32) throw new InvalidDataException("La clave de sesiones debe tener 32 bytes.");
         var nonce = RandomNumberGenerator.GetBytes(12); var cipher = new byte[plain.Length]; var tag = new byte[16];
         try
@@ -30,8 +31,8 @@ public sealed class SessionVault(string directory, string keyFile)
     }
     public SessionData Load(string account, string taxId)
     {
-        if (!File.Exists(PathFor(account)) || !File.Exists(keyFile)) throw new HumanActionRequiredException("No hay sesión SRI protegida para esta cuenta. Complete el inicio de sesión local.");
-        var encrypted = File.ReadAllBytes(PathFor(account)); var key = File.ReadAllBytes(keyFile);
+        if (!File.Exists(PathFor(account))) throw new HumanActionRequiredException("No hay sesión SRI protegida para esta cuenta. Complete el inicio de sesión local.");
+        var encrypted = File.ReadAllBytes(PathFor(account)); var key = EncryptionKey.Read("SRI_SESSION_KEY_BASE64", keyFile);
         if (encrypted.Length < 28 || key.Length != 32) throw new HumanActionRequiredException("Sesión protegida no válida; autentique nuevamente.");
         var plain = new byte[encrypted.Length - 28];
         try

@@ -14,6 +14,8 @@ var password = Environment.GetEnvironmentVariable("SRI_ADMIN_PASSWORD") ?? throw
 if (password.Length < 16) throw new InvalidOperationException("SRI_ADMIN_PASSWORD requiere al menos 16 caracteres.");
 var output = Environment.GetEnvironmentVariable("SRI_OUTPUT_PATH") ?? throw new InvalidOperationException("Configure SRI_OUTPUT_PATH.");
 var panelUser = Environment.GetEnvironmentVariable("SRI_ADMIN_USERNAME") ?? throw new InvalidOperationException("Configure SRI_ADMIN_USERNAME con la identidad local del administrador.");
+if (builder.Environment.IsProduction())
+    EncryptionKey.Validate("SRI_CREDENTIAL_KEY_BASE64", Environment.GetEnvironmentVariable("SRI_CREDENTIAL_KEY_FILE") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SRI-Automation", "secrets", "credential.key"));
 builder.Services.AddSingleton<IStateRepository>(new JsonStateRepository(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage")));
 builder.Services.AddSingleton<IStorageProvider>(services=>new DocumentStorage(output,()=>services.GetRequiredService<IStateRepository>().Read(s=>s.Settings.DownloadSubfolder)));
 builder.Services.AddSingleton<IDocumentParser, XmlDocumentParser>();
