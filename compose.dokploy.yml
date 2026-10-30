@@ -4,6 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile
     environment:
+      ConnectionStrings__DefaultConnection: ${ConnectionStrings__DefaultConnection:?Configure ConnectionStrings__DefaultConnection}
       SRI_OUTPUT_PATH: /app/downloads
       SRI_STATE_PATH: /app/storage
       SRI_SESSION_PATH: /app/sessions
@@ -41,6 +42,7 @@ services:
       context: .
       dockerfile: Dockerfile.worker
     environment:
+      ConnectionStrings__DefaultConnection: ${ConnectionStrings__DefaultConnection:?Configure ConnectionStrings__DefaultConnection}
       SRI_WORKER_PAUSED: ${SRI_WORKER_PAUSED:-true}
       SRI_OUTPUT_PATH: /app/downloads
       SRI_STATE_PATH: /app/storage

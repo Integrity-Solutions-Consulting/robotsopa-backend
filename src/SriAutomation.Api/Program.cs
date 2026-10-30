@@ -8,7 +8,12 @@ using SriAutomation.Domain;
 using SriAutomation.Infrastructure;
 using SriAutomation.Api;
 
-var builder = WebApplication.CreateBuilder(args);
+var builder = WebApplication.CreateBuilder(args.Where(arg => arg is not "--db-migrate" and not "--db-init").ToArray());
+var postgresConnection = builder.Configuration.GetConnectionString("DefaultConnection");
+if (string.IsNullOrWhiteSpace(postgresConnection)) postgresConnection = null;
+if (string.IsNullOrWhiteSpace(postgresConnection) && !builder.Environment.IsDevelopment()) throw new InvalidOperationException("Configure ConnectionStrings__DefaultConnection.");
+if (args.Contains("--db-migrate")) { PostgresAdministration.Migrate(postgresConnection ?? throw new InvalidOperationException("Configure ConnectionStrings__DefaultConnection.")); return; }
+if (args.Contains("--db-init")) { PostgresAdministration.Initialize(postgresConnection ?? throw new InvalidOperationException("Configure ConnectionStrings__DefaultConnection.")); return; }
 var secureCookie = string.Equals(Environment.GetEnvironmentVariable("SRI_COOKIE_SECURE"), "true", StringComparison.OrdinalIgnoreCase);
 var password = Environment.GetEnvironmentVariable("SRI_ADMIN_PASSWORD") ?? throw new InvalidOperationException("Configure SRI_ADMIN_PASSWORD.");
 if (password.Length < 16) throw new InvalidOperationException("SRI_ADMIN_PASSWORD requiere al menos 16 caracteres.");
@@ -17,7 +22,8 @@ var panelUser = Environment.GetEnvironmentVariable("SRI_ADMIN_USERNAME") ?? thro
 var credentialKeyFile = Environment.GetEnvironmentVariable("SRI_CREDENTIAL_KEY_FILE");
 if (Environment.GetEnvironmentVariable("SRI_CREDENTIAL_KEY_BASE64") is not null || credentialKeyFile is not null)
     EncryptionKey.Validate("SRI_CREDENTIAL_KEY_BASE64", credentialKeyFile ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SRI-Automation", "secrets", "credential.key"));
-builder.Services.AddSingleton<IStateRepository>(new JsonStateRepository(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage")));
+builder.Services.AddSingleton<IStateRepository>(_ => postgresConnection is null ? new JsonStateRepository(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage")) : new PostgresStateRepository(postgresConnection));
+builder.Services.AddSingleton<IPanelDatabase>(_ => postgresConnection is null ? new PanelDatabase(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage")) : new PostgresPanelDatabase(postgresConnection));
 builder.Services.AddSingleton<IStorageProvider>(services=>new DocumentStorage(output,()=>services.GetRequiredService<IStateRepository>().Read(s=>s.Settings.DownloadSubfolder)));
 builder.Services.AddSingleton<IDocumentParser, XmlDocumentParser>();
 builder.Services.AddEndpointsApiExplorer(); builder.Services.AddSwaggerGen(); builder.Services.AddHealthChecks().AddCheck<SriAutomation.Api.StorageHealthCheck>("storage");
@@ -27,10 +33,9 @@ var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 var app = builder.Build();
 app.UseCors();
-var database = new PanelDatabase(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage"));
-database.Initialize("Cristopher", password);
-database.SyncAudit(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Audit.ToList()));
-database.SyncAccounts(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Accounts.ToList()));
+var database = app.Services.GetRequiredService<IPanelDatabase>();
+if (postgresConnection is null) { database.Initialize("Cristopher", password); database.SyncAudit(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Audit.ToList())); database.SyncAccounts(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Accounts.ToList())); }
+else PostgresAdministration.Verify(postgresConnection);
 var sessions = new ConcurrentDictionary<string, (DateTimeOffset Expiry, string User, string Role, bool MustChange)>();
 app.Use(async (context, next) =>
 {
@@ -65,6 +70,7 @@ app.Use(async (context, next) =>
     finally { AuditEndpoints.RecordRequest(context, app.Services.GetRequiredService<IStateRepository>()); }
 });
 app.UseRateLimiter(); if (app.Environment.IsDevelopment()) { app.UseSwagger(); app.UseSwaggerUI(); } app.MapHealthChecks("/health");
+app.MapGet("/health/ready", () => { try { if (postgresConnection is null) return Results.StatusCode(503); PostgresAdministration.Verify(postgresConnection); return Results.Ok(); } catch { return Results.StatusCode(503); } });
 app.Services.GetRequiredService<IStateRepository>().Update(s => { DataScope.MarkLegacyFixtures(s);
 if(s.AuthenticationMode!="EncryptedProfilesV4") {
  foreach(var op in s.Authentications){op.SessionVerified=false;op.Expires=null;op.Command="";op.Status="Cancelled";op.BrowserOpened=false;}
@@ -187,7 +193,7 @@ static void ValidateSchedule(Schedule x, State s) { Validation.Query(x.Query, s)
 
 
 
-static bool Allowed(HttpContext c, PanelDatabase db, string account) => c.Items["PanelRole"] as string == "admin" || db.AssignedAccounts((string)c.Items["PanelUser"]!).Contains(account);
+static bool Allowed(HttpContext c, IPanelDatabase db, string account) => c.Items["PanelRole"] as string == "admin" || db.AssignedAccounts((string)c.Items["PanelUser"]!).Contains(account);
 static bool TestView(HttpContext c) => c.Request.Headers["X-SRI-Test-Data"] == "1";
 record Login(string Username, string Password);
 record PanelUserRequest(string Username, string Role, string Password);

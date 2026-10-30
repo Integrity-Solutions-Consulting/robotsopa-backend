@@ -4,7 +4,7 @@ using SriAutomation.Infrastructure;
 namespace SriAutomation.Api;
 public static class PanelEndpoints
 {
-    public static void MapPanelEndpoints(this WebApplication app,RouteGroupBuilder api,PanelDatabase database)
+    public static void MapPanelEndpoints(this WebApplication app,RouteGroupBuilder api,IPanelDatabase database)
     {
         api.MapGet("/audit",(IStateRepository r,HttpContext c,int page=1)=>r.Read(s=>new {total=s.Audit.Count(a=>(!a.IsTest||c.Request.Headers["X-SRI-Test-Data"]=="1") && (c.Items["PanelRole"] as string=="admin" || a.User==(string)c.Items["PanelUser"]!)),items=s.Audit.Where(a=>(!a.IsTest||c.Request.Headers["X-SRI-Test-Data"]=="1") && (c.Items["PanelRole"] as string=="admin" || a.User==(string)c.Items["PanelUser"]!)).OrderByDescending(a=>a.At).Skip((Math.Max(page,1)-1)*50).Take(50).ToList()}));
         api.MapGet("/settings",(IStateRepository r,HttpContext c)=>c.Items["PanelRole"] as string=="asistente" ? database.Preferences((string)c.Items["PanelUser"]!) : r.Read(s=>s.Settings));

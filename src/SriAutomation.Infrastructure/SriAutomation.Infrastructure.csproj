@@ -2,10 +2,13 @@
 
   <ItemGroup>
     <ProjectReference Include="..\SriAutomation.Application\SriAutomation.Application.csproj" />
+    <EmbeddedResource Include="..\..\deploy\postgres\migrations\002_state_foundation.sql" LogicalName="SriAutomation.Migrations.002.sql" />
+    <EmbeddedResource Include="..\..\deploy\postgres\migrations\003_panel.sql" LogicalName="SriAutomation.Migrations.003.sql" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Npgsql" Version="10.0.0" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.53.3" />
     <PackageReference Include="ClosedXML" Version="0.105.1" />
     <PackageReference Include="PdfPig" Version="0.1.16" />

@@ -4,7 +4,7 @@ using SriAutomation.Domain;
 
 namespace SriAutomation.Infrastructure;
 
-public sealed class PanelDatabase
+public sealed class PanelDatabase : IPanelDatabase
 {
     private readonly string connectionString;
     public PanelDatabase(string directory)

@@ -8,7 +8,7 @@ namespace SriAutomation.Api;
 // is checked on the server, even when an identifier is supplied directly.
 public static class AssistantAccess
 {
-    public static async Task<bool> Allowed(HttpContext c, PanelDatabase db, IStateRepository repository)
+    public static async Task<bool> Allowed(HttpContext c, IPanelDatabase db, IStateRepository repository)
     {
         var parts=c.Request.Path.Value!.Split('/',StringSplitOptions.RemoveEmptyEntries);
         if(parts.Length<3 || parts[0]!="api" || parts[1]!="v1") return false;
