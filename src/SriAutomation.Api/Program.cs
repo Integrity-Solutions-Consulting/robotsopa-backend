@@ -18,7 +18,7 @@ var secureCookie = string.Equals(Environment.GetEnvironmentVariable("SRI_COOKIE_
 var password = Environment.GetEnvironmentVariable("SRI_ADMIN_PASSWORD") ?? throw new InvalidOperationException("Configure SRI_ADMIN_PASSWORD.");
 if (password.Length < 16) throw new InvalidOperationException("SRI_ADMIN_PASSWORD requiere al menos 16 caracteres.");
 var output = Environment.GetEnvironmentVariable("SRI_OUTPUT_PATH") ?? Path.GetFullPath("downloads");
-var panelUser = Environment.GetEnvironmentVariable("SRI_ADMIN_USERNAME") ?? throw new InvalidOperationException("Configure SRI_ADMIN_USERNAME con la identidad local del administrador.");
+_ = Environment.GetEnvironmentVariable("SRI_ADMIN_USERNAME") ?? throw new InvalidOperationException("Configure SRI_ADMIN_USERNAME con la identidad local del administrador.");
 var credentialKeyFile = Environment.GetEnvironmentVariable("SRI_CREDENTIAL_KEY_FILE");
 if (Environment.GetEnvironmentVariable("SRI_CREDENTIAL_KEY_BASE64") is not null || credentialKeyFile is not null)
     EncryptionKey.Validate("SRI_CREDENTIAL_KEY_BASE64", credentialKeyFile ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SRI-Automation", "secrets", "credential.key"));
@@ -81,8 +81,7 @@ var api = app.MapGroup("/api/v1");
 api.MapPost("/auth/login", (Login login, HttpContext c) =>
 {
     if (string.IsNullOrWhiteSpace(login.Username) || login.Password is null || login.Username.Length > 80 || login.Password.Length > 1024) return Results.Unauthorized();
-    var username = string.Equals(login.Username.Trim(), panelUser, StringComparison.OrdinalIgnoreCase) ? "Cristopher" : login.Username;
-    var identity = database.Authenticate(username, login.Password);
+    var identity = database.Authenticate(login.Username, login.Password);
     if (identity is null) return Results.Unauthorized();
     foreach (var expired in sessions.Where(s => s.Value.Expiry <= DateTimeOffset.UtcNow)) sessions.TryRemove(expired.Key, out _);
     var token = Convert.ToHexString(RandomNumberGenerator.GetBytes(32)); sessions[token] = (DateTimeOffset.UtcNow.AddHours(8), identity.Value.User, identity.Value.Role, identity.Value.MustChange);
