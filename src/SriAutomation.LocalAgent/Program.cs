@@ -244,7 +244,8 @@ internal sealed class InteractiveAgent(IPlaywright playwright, HttpClient client
         }catch(OperationCanceledException){if(current?.Operation==command.Operation)await Close(false);await Send(command.Operation,"Cancelled",false);}
         catch(PortalRecognitionException ex){await PauseQuery(command,target,ex.Code);}
         catch(HumanActionRequiredException){await PauseQuery(command,target,"QueryControlsMissing");}
-        catch(IOException){await PauseQuery(command,target,"CredentialUnavailable");}
+        catch(DocumentTransferException ex){await PauseQuery(command,target,ex.Code);}
+        catch(IOException){await PauseQuery(command,target,"QueryTransportFailed");}
         catch(Exception ex)when(ex is TimeoutException or PlaywrightException){await PauseQuery(command,target,"QueryTransportFailed");}
         catch(Exception){if(current?.Operation==command.Operation)await Close(false);await Send(command.Operation,"QueryFailed",false,"QueryTransportFailed");}
     }

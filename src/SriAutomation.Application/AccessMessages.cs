@@ -20,6 +20,8 @@ public static class AccessMessages
         "QueryTypeMissing"=>"La sección abierta no contiene un selector reconocible de tipos de comprobante. No se envió la consulta.",
         "QueryDateMissing"=>"No se reconocieron los filtros de fecha de emisión. No se envió la consulta.",
         "QuerySearchMissing"=>"No se encontró una única acción Consultar o Buscar. No se envió la consulta.",
+        "DocumentProcessingFailed"=>"El comprobante llegó al sistema, pero no se pudo procesar o guardar. Revise el destino configurado, sus permisos y los registros de la API; si usa una carpeta sincronizada, compruebe también OneDrive.",
+        "DocumentTransferFailed"=>"No se pudo confirmar la transferencia del comprobante al sistema local. Revise la conexión con la API y el destino configurado antes de reanudar.",
         "QueryTransportFailed"=>"La consulta o la transferencia no pudieron completarse. Revise el progreso; se conservaron los archivos válidos.",
         _=>null
     };

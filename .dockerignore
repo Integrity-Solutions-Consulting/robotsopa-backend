@@ -15,3 +15,11 @@ storage
 downloads
 sessions
 credentials
+**/*.sqlite*
+**/*.log
+**/.env*
+**/storage/**
+**/downloads/**
+**/sessions/**
+**/credentials/**
+**/.secrets/**

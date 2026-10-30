@@ -1,16 +1,10 @@
-# Configuración cuando se ejecuta solo la imagen Dockerfile de la API.
-# Para el despliegue API + worker use .env.example y compose.dokploy.yml.
+﻿# API independiente: valores de ejemplo, sin secretos reales.
 ASPNETCORE_ENVIRONMENT=Production
-ASPNETCORE_URLS=http://+:8080
-Cors__AllowedOrigins__0=https://app.midominio.com
+Cors__AllowedOrigins__0=https://app.ejemplo.com
 SRI_COOKIE_SECURE=true
-SRI_ADMIN_USERNAME=CAMBIAR_POR_USUARIO
+SRI_ADMIN_USERNAME=CAMBIAR
 SRI_ADMIN_PASSWORD=CAMBIAR_POR_UNA_CLAVE_UNICA_DE_AL_MENOS_16_CARACTERES
-SRI_STATE_PATH=/app/storage
-SRI_OUTPUT_PATH=/app/downloads
-SRI_SESSION_PATH=/app/sessions
-SRI_CREDENTIAL_PATH=/app/credentials
-SRI_PORTAL_PROFILE=/app/config/sri-portal.json
-SRI_CREDENTIAL_KEY_BASE64=CAMBIAR_POR_BASE64_DE_LA_CLAVE_ORIGINAL_DE_32_BYTES
-# Para usar el agente, monte también agent.key y configure SRI_AGENT_KEY_FILE.
-# Conserve los volúmenes y la clave original. No publique este archivo con secretos.
+# Opcionales: la imagen ya define las rutas /app y el puerto 8080.
+# SRI_CREDENTIAL_KEY_FILE=/run/secrets/credential.key
+# SRI_CREDENTIAL_KEY_BASE64=BASE64_DE_LA_CLAVE_ORIGINAL_DE_32_BYTES
+# SRI_AGENT_KEY_FILE=/run/secrets/agent.key

@@ -12,10 +12,11 @@ var builder = WebApplication.CreateBuilder(args);
 var secureCookie = string.Equals(Environment.GetEnvironmentVariable("SRI_COOKIE_SECURE"), "true", StringComparison.OrdinalIgnoreCase);
 var password = Environment.GetEnvironmentVariable("SRI_ADMIN_PASSWORD") ?? throw new InvalidOperationException("Configure SRI_ADMIN_PASSWORD.");
 if (password.Length < 16) throw new InvalidOperationException("SRI_ADMIN_PASSWORD requiere al menos 16 caracteres.");
-var output = Environment.GetEnvironmentVariable("SRI_OUTPUT_PATH") ?? throw new InvalidOperationException("Configure SRI_OUTPUT_PATH.");
+var output = Environment.GetEnvironmentVariable("SRI_OUTPUT_PATH") ?? Path.GetFullPath("downloads");
 var panelUser = Environment.GetEnvironmentVariable("SRI_ADMIN_USERNAME") ?? throw new InvalidOperationException("Configure SRI_ADMIN_USERNAME con la identidad local del administrador.");
-if (builder.Environment.IsProduction())
-    EncryptionKey.Validate("SRI_CREDENTIAL_KEY_BASE64", Environment.GetEnvironmentVariable("SRI_CREDENTIAL_KEY_FILE") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SRI-Automation", "secrets", "credential.key"));
+var credentialKeyFile = Environment.GetEnvironmentVariable("SRI_CREDENTIAL_KEY_FILE");
+if (Environment.GetEnvironmentVariable("SRI_CREDENTIAL_KEY_BASE64") is not null || credentialKeyFile is not null)
+    EncryptionKey.Validate("SRI_CREDENTIAL_KEY_BASE64", credentialKeyFile ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SRI-Automation", "secrets", "credential.key"));
 builder.Services.AddSingleton<IStateRepository>(new JsonStateRepository(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage")));
 builder.Services.AddSingleton<IStorageProvider>(services=>new DocumentStorage(output,()=>services.GetRequiredService<IStateRepository>().Read(s=>s.Settings.DownloadSubfolder)));
 builder.Services.AddSingleton<IDocumentParser, XmlDocumentParser>();
