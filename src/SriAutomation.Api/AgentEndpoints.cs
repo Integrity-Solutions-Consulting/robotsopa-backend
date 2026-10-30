@@ -158,3 +158,6 @@ public static class AgentEndpoints
     public sealed record Observation(string Operation,BrowserObservation Value);
     public sealed record AgentReport(string Operation, string Status, bool BrowserOpened, bool RemoteLogoutConfirmed = false,string? ReasonCode=null);
 }
+
+
+//coemntario
