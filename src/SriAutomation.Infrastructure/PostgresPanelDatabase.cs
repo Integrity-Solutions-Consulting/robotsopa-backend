@@ -24,7 +24,8 @@ public sealed class PostgresPanelDatabase(string connectionString) : IPanelDatab
     public void Initialize(string username, string password)
     {
         if (string.IsNullOrWhiteSpace(username) || username.Length > 80 || username.Any(char.IsControl)) throw new ArgumentException("Usuario inválido.");
-        if (password is null || password.Length < 16 || password.Length > 1024) throw new ArgumentException("Contraseña inválida.");
+        if (password is null) throw new ArgumentException("La contraseña de inicialización está ausente.", nameof(password));
+        if (password.Length is < 16 or > 1024) throw new ArgumentException($"La contraseña de inicialización tiene una longitud inválida ({password.Length}); debe tener entre 16 y 1024 unidades UTF-16.", nameof(password));
         var salt = RandomNumberGenerator.GetBytes(16);
         using var db = Open();
         using var cmd = new NpgsqlCommand("INSERT INTO panel_users(username,role,salt,password_hash) VALUES (@user,'admin',@salt,@hash) ON CONFLICT DO NOTHING", db);

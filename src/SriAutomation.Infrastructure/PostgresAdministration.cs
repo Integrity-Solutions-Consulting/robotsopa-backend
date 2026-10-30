@@ -4,8 +4,10 @@ public static class PostgresAdministration
 {
     public static void Initialize(string connectionString)
     {
+        var password = Environment.GetEnvironmentVariable("SRI_ADMIN_PASSWORD");
+        if (password is null) throw new InvalidOperationException("Falta la variable SRI_ADMIN_PASSWORD en el entorno de inicialización.");
+        if (password.Length is < 16 or > 1024) throw new InvalidOperationException($"SRI_ADMIN_PASSWORD tiene una longitud inválida ({password.Length}); debe tener entre 16 y 1024 unidades UTF-16.");
         Migrate(connectionString);
-        var password = Environment.GetEnvironmentVariable("SRI_ADMIN_PASSWORD") ?? throw new InvalidOperationException("Configure SRI_ADMIN_PASSWORD.");
         new PostgresPanelDatabase(connectionString).Initialize("Cristopher", password);
         Verify(connectionString);
     }
