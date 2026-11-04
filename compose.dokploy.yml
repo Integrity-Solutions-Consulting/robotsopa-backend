@@ -5,6 +5,13 @@ services:
       dockerfile: Dockerfile
     environment:
       ConnectionStrings__DefaultConnection: ${ConnectionStrings__DefaultConnection:?Configure ConnectionStrings__DefaultConnection}
+      SRI_SHAREPOINT_ENABLED: ${SRI_SHAREPOINT_ENABLED:-false}
+      SRI_SHAREPOINT_TENANT_ID: ${SRI_SHAREPOINT_TENANT_ID:-}
+      SRI_SHAREPOINT_CLIENT_ID: ${SRI_SHAREPOINT_CLIENT_ID:-}
+      SRI_SHAREPOINT_CLIENT_SECRET: ${SRI_SHAREPOINT_CLIENT_SECRET:-}
+      SRI_SHAREPOINT_SITE_ID: ${SRI_SHAREPOINT_SITE_ID:-}
+      SRI_SHAREPOINT_DRIVE_ID: ${SRI_SHAREPOINT_DRIVE_ID:-}
+      SRI_SHAREPOINT_FOLDER: ${SRI_SHAREPOINT_FOLDER:-}
       SRI_OUTPUT_PATH: /app/downloads
       SRI_STATE_PATH: /app/storage
       SRI_SESSION_PATH: /app/sessions
@@ -43,6 +50,13 @@ services:
       dockerfile: Dockerfile.worker
     environment:
       ConnectionStrings__DefaultConnection: ${ConnectionStrings__DefaultConnection:?Configure ConnectionStrings__DefaultConnection}
+      SRI_SHAREPOINT_ENABLED: ${SRI_SHAREPOINT_ENABLED:-false}
+      SRI_SHAREPOINT_TENANT_ID: ${SRI_SHAREPOINT_TENANT_ID:-}
+      SRI_SHAREPOINT_CLIENT_ID: ${SRI_SHAREPOINT_CLIENT_ID:-}
+      SRI_SHAREPOINT_CLIENT_SECRET: ${SRI_SHAREPOINT_CLIENT_SECRET:-}
+      SRI_SHAREPOINT_SITE_ID: ${SRI_SHAREPOINT_SITE_ID:-}
+      SRI_SHAREPOINT_DRIVE_ID: ${SRI_SHAREPOINT_DRIVE_ID:-}
+      SRI_SHAREPOINT_FOLDER: ${SRI_SHAREPOINT_FOLDER:-}
       SRI_WORKER_PAUSED: ${SRI_WORKER_PAUSED:-true}
       SRI_OUTPUT_PATH: /app/downloads
       SRI_STATE_PATH: /app/storage

@@ -25,6 +25,8 @@ if (Environment.GetEnvironmentVariable("SRI_CREDENTIAL_KEY_BASE64") is not null 
 builder.Services.AddSingleton<IStateRepository>(_ => postgresConnection is null ? new JsonStateRepository(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage")) : new PostgresStateRepository(postgresConnection));
 builder.Services.AddSingleton<IPanelDatabase>(_ => postgresConnection is null ? new PanelDatabase(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage")) : new PostgresPanelDatabase(postgresConnection));
 builder.Services.AddSingleton<IStorageProvider>(services=>new DocumentStorage(output,()=>services.GetRequiredService<IStateRepository>().Read(s=>s.Settings.DownloadSubfolder)));
+if (string.Equals(Environment.GetEnvironmentVariable("SRI_SHAREPOINT_ENABLED"), "true", StringComparison.OrdinalIgnoreCase))
+    builder.Services.AddSingleton(new SharePointGraphClient(new HttpClient { Timeout = TimeSpan.FromMinutes(4) }, SharePointOptions.FromEnvironment()));
 builder.Services.AddSingleton<IDocumentParser, XmlDocumentParser>();
 builder.Services.AddEndpointsApiExplorer(); builder.Services.AddSwaggerGen(); builder.Services.AddHealthChecks().AddCheck<SriAutomation.Api.StorageHealthCheck>("storage");
 builder.Services.AddRateLimiter(o => o.AddFixedWindowLimiter("login", x => { x.PermitLimit = 10; x.Window = TimeSpan.FromMinutes(1); x.QueueLimit = 0; }));
@@ -134,6 +136,7 @@ api.MapPost("/executions/{id}/retry", (string id, IStateRepository r) => r.Updat
 }));
 app.MapAgentEndpoints(api);
 app.MapNativeExecution();
+app.MapLocalDelivery();
 app.MapPanelEndpoints(api, database);
 api.MapGet("/configurations", (IStateRepository r, HttpContext c) => r.Read(s => s.Configurations.Where(q => DataScope.Visible(s, q.Account, TestView(c)) && Allowed(c,database,q.Account)).ToList()));
 api.MapPost("/configurations", (Query q, IStateRepository r) => r.Update(s => { Validation.Query(q, s); s.Configurations.Add(q); return q; }));
@@ -143,6 +146,25 @@ api.MapGet("/documents", (IStateRepository r, HttpContext c, string? account, st
     if(source is not null)items=items.Where(d=>d.Source==source);
     return new { total = items.Count(), items = items.OrderByDescending(d => d.Issued).Skip((Math.Max(1, page) - 1) * Math.Clamp(pageSize, 1, 100)).Take(Math.Clamp(pageSize, 1, 100)).ToList() };
 }));
+api.MapGet("/sharepoint/uploads", (IStateRepository r, HttpContext c) =>
+{
+    if (c.Items["PanelRole"] as string != "admin") return Results.StatusCode(403);
+    var items = r.Read(s => s.SharePointUploads.OrderByDescending(u => u.Created).Take(200).Select(u => new { u.Id, u.DocumentId, u.Account, u.TaxId, u.User, u.Extension, u.RemotePath, u.Status, u.Attempts, u.Created, u.Completed, u.NextAttempt, u.Error, u.Cleaned, u.CleanupError }).ToList());
+    return Results.Ok(items);
+});
+api.MapPost("/sharepoint/uploads/{id}/retry", (string id, IStateRepository r, HttpContext c) =>
+{
+    if (c.Items["PanelRole"] as string != "admin") return Results.StatusCode(403);
+    r.Update(s =>
+    {
+        var item = s.SharePointUploads.SingleOrDefault(u => u.Id == id) ?? throw new KeyNotFoundException();
+        if (item.Status != "Failed") throw new ArgumentException("Solo se pueden reintentar publicaciones fallidas.");
+        item.Status = "Pending"; item.NextAttempt = null; item.Error = null;
+        AuditTrail.Add(s, (string)c.Items["PanelUser"]!, "Publicación SharePoint", item.Account, $"Reintento solicitado: {item.RemotePath}");
+        return true;
+    });
+    return Results.Ok(new { queued = true });
+});
 api.MapPost("/documents/import/{account}", async (string account, HttpRequest request, IStateRepository r, IDocumentParser parser, IStorageProvider storage) =>
 {
     var registeredAccount = r.Read(s => s.Accounts.SingleOrDefault(a => a.Id == account)) ?? throw new ArgumentException("Cuenta inexistente.");
@@ -156,10 +178,19 @@ api.MapPost("/documents/{id}/pdf", async (string id, HttpRequest request, IState
     using var content = new MemoryStream(); await request.Body.CopyToAsync(content); var bytes = content.ToArray(); var path = storage.Save(doc, "pdf", bytes); var warning = new PdfInspector().Check(bytes, doc.AccessKey);
     return r.Update(s => { var d = s.Documents.Single(d => d.Id == id); d.PdfPath = path; d.PdfSha256 = DownloadPipeline.Hash(bytes); if (warning is not null) { d.Status = "Revisar"; d.Warning = warning; } return d; });
 });
-api.MapGet("/documents/{id}/{extension}", (string id, string extension, IStateRepository r, IStorageProvider storage) =>
+api.MapGet("/documents/{id}/{extension}", async (string id, string extension, IStateRepository r, IStorageProvider storage, HttpContext c, CancellationToken cancellation) =>
 {
     var doc = r.Read(s => s.Documents.SingleOrDefault(d => d.Id == id) ?? throw new KeyNotFoundException());
+    if (!Allowed(c, database, doc.Account)) return Results.StatusCode(403);
     var path = extension switch { "xml" => doc.XmlPath, "pdf" => doc.PdfPath, _ => throw new ArgumentException("Extensión inválida.") } ?? throw new KeyNotFoundException("Archivo no disponible.");
+    var remote = r.Read(s => s.SharePointUploads.FirstOrDefault(u => u.DocumentId == id && u.Extension == extension && u.Status == "Completed"));
+    if (remote is not null)
+    {
+        var graph = c.RequestServices.GetService<SharePointGraphClient>() ?? throw new IOException("SharePoint no está configurado.");
+        var bytes = await graph.ReadIfExists(remote.RemotePath, cancellation) ?? throw new KeyNotFoundException("Archivo remoto no disponible.");
+        if (DownloadPipeline.Hash(bytes) != remote.Sha256) throw new InvalidDataException("El archivo remoto no supera la comprobación de integridad.");
+        return Results.File(bytes, extension == "xml" ? "application/xml" : "application/pdf", Path.GetFileName(path));
+    }
     return Results.File(storage.Resolve(path), extension == "xml" ? "application/xml" : "application/pdf", Path.GetFileName(path));
 });
 api.MapPost("/reports", (ReportRequest request, IStateRepository r, IStorageProvider storage,HttpContext c) =>

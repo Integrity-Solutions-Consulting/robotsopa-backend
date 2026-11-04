@@ -3,7 +3,7 @@ namespace SriAutomation.Domain;
 public sealed record Account(string Id, string Name, string? TaxId = null, bool IsTest = false);
 public sealed record Query(string Account, DateOnly From, DateOnly To, string[] Types,
     string Mode = "Sri", bool Pdf = true, bool Xml = true, string? Establishment = null, string? EmissionPoint = null,
-    string AuthorizationStatus = "Autorizado", bool BroadRangeApproved = false, int MaxDocuments = 10);
+    string AuthorizationStatus = "Autorizado", bool BroadRangeApproved = false, int MaxDocuments = 10, string StorageMode = "LEGACY");
 public sealed class Execution
 {
     public List<ExecutionEvent> Events { get; set; } = [];
@@ -29,6 +29,9 @@ public sealed class Execution
     public List<string> Issues { get; set; } = [];
     public List<string> AttemptedKeys { get; set; } = [];
     public string? RequestedBy { get; set; }
+    public int DeliveryTotal { get; set; }
+    public int DeliveryCompleted { get; set; }
+    public string? DeliveryError { get; set; }
 }
 public sealed record ExecutionEvent(DateTimeOffset At,string Stage,string Message);
 public sealed record ExecutionReport(int Year,int Month,string Path);
@@ -58,6 +61,42 @@ public sealed class Voucher
 }
 public sealed record SriCheckpoint(DateOnly Date, string Type, int Page, int Row, bool Complete = false);
 public sealed record QueryResult(DateOnly Date, string Type, int Found, int Downloaded, int Errors, string Status);
+public sealed class LocalDelivery
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string ExecutionId { get; set; } = "";
+    public string DocumentId { get; set; } = "";
+    public string TaxId { get; set; } = "";
+    public string Extension { get; set; } = "";
+    public string LocalPath { get; set; } = "";
+    public string Sha256 { get; set; } = "";
+    public string Status { get; set; } = "Pending";
+    public int Attempts { get; set; }
+    public string? Error { get; set; }
+    public DateTimeOffset? Completed { get; set; }
+}
+public sealed class SharePointUpload
+{
+    public string Id { get; set; } = Guid.NewGuid().ToString("N");
+    public string DocumentId { get; set; } = "";
+    public string Account { get; set; } = "";
+    public string TaxId { get; set; } = "";
+    public string User { get; set; } = "";
+    public string Extension { get; set; } = "";
+    public string LocalPath { get; set; } = "";
+    public string RemotePath { get; set; } = "";
+    public string Sha256 { get; set; } = "";
+    public string Status { get; set; } = "Pending";
+    public int Attempts { get; set; }
+    public DateTimeOffset Created { get; set; } = DateTimeOffset.UtcNow;
+    public DateTimeOffset? NextAttempt { get; set; }
+    public DateTimeOffset? LeaseUntil { get; set; }
+    public string? LeaseId { get; set; }
+    public string? Error { get; set; }
+    public DateTimeOffset? Completed { get; set; }
+    public bool Cleaned { get; set; }
+    public string? CleanupError { get; set; }
+}
 public sealed class Schedule
 {
     public int IntervalDays { get; set; } = 1;
@@ -80,6 +119,8 @@ public sealed class State
     public List<Query> Configurations { get; set; } = [];
     public List<Execution> Executions { get; set; } = [];
     public List<Voucher> Documents { get; set; } = [];
+    public List<SharePointUpload> SharePointUploads { get; set; } = [];
+    public List<LocalDelivery> LocalDeliveries { get; set; } = [];
     public List<Schedule> Schedules { get; set; } = [];
     public DateTimeOffset? WorkerHeartbeat { get; set; }
 }

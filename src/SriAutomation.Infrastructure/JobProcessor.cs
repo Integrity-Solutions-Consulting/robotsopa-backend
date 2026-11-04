@@ -73,6 +73,7 @@ public sealed class JobProcessor(IStateRepository repository, IStorageProvider s
                 if (execution.Query.Mode == "Stored") { job.Found = documents.Count; job.Processed = documents.Count; }
                 job.Errors = Math.Max(job.Errors, documents.Count(d => d.Status != "ValidadoXML"));
                 job.Status = job.CancelRequested ? "Cancelled" : job.Errors > 0 ? "CompletedWithWarnings" : "Completed";
+                if (!job.CancelRequested && job.Query.StorageMode == "LOCAL_WINDOWS" && s.LocalDeliveries.Any(x => x.ExecutionId == job.Id && x.Status != "Completed")) { job.Status = job.Stage = "WaitingForDelivery"; job.Finished = null; job.Message = "Esperando confirmación del agente Windows."; ExecutionProgress.Set(s,job.Id,job.Stage,job.Message); return true; }
                 job.Finished = DateTimeOffset.UtcNow; job.Message = execution.Query.Mode == "Sri" ? "Consultas finalizadas y reportes actualizados desde los archivos almacenados." : "Reportes generados desde documentos almacenados; sin consulta SRI.";
                 job.Stage = job.Status;
                 ExecutionProgress.Set(s,job.Id,job.Status,job.Message);

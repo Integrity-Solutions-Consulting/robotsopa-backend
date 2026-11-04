@@ -21,6 +21,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\SriAutomation.Infrastructure\SriAutomation.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\SriAutomation.Api\SriAutomation.Api.csproj" />
+    <ProjectReference Include="..\..\src\SriAutomation.LocalAgent\SriAutomation.LocalAgent.csproj" />
     <ProjectReference Include="..\..\src\SriAutomation.Automation\SriAutomation.Automation.csproj" />
   </ItemGroup>
 

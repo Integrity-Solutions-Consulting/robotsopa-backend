@@ -44,6 +44,9 @@ public static class Validation
         if(query.Types.Distinct().Count()!=query.Types.Length)throw new ArgumentException("No repita tipos de comprobante.");
         if(query.To > query.From.AddYears(1).AddDays(-1))throw new ArgumentException("Cada operación admite hasta un año; seleccione un rango menor.");
         if (query.Mode is not "Sri" and not "Stored") throw new ArgumentException("Modo inválido.");
+        if (query.StorageMode is not ("LEGACY" or "LOCAL_WINDOWS" or "SHAREPOINT")) throw new ArgumentException("Destino inválido.");
+        if (query.StorageMode == "SHAREPOINT" && !string.Equals(Environment.GetEnvironmentVariable("SRI_SHAREPOINT_ENABLED"), "true", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("SharePoint no está habilitado.");
+        if (query.StorageMode == "LOCAL_WINDOWS" && query.Mode != "Sri") throw new ArgumentException("El destino local requiere consulta SRI.");
         if (!query.Pdf && !query.Xml) throw new ArgumentException("Seleccione PDF o XML.");
         foreach (var code in new[] { query.Establishment, query.EmissionPoint })
             if (!string.IsNullOrEmpty(code) && (code.Length != 3 || !code.All(char.IsAsciiDigit))) throw new ArgumentException("Establecimiento y punto deben tener tres dígitos.");

@@ -17,11 +17,21 @@ catch (IOException) { return; }
 using var agentLock = singleton;
 Environment.SetEnvironmentVariable("SRI_SESSION_PATH", Path.Combine(root, "storage/sessions"));
 Environment.SetEnvironmentVariable("SRI_SESSION_KEY_FILE", Path.Combine(secretRoot, "session.key"));
-using var client = new HttpClient { BaseAddress = new Uri(Environment.GetEnvironmentVariable("SRI_AGENT_API") ?? "http://127.0.0.1:5000"), Timeout = TimeSpan.FromSeconds(8) };
-if (!client.BaseAddress.IsLoopback) throw new InvalidOperationException("El agente solo admite una API local.");
+using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = new Uri(Environment.GetEnvironmentVariable("SRI_AGENT_API") ?? "http://127.0.0.1:5000"), Timeout = TimeSpan.FromSeconds(8) };
+if (!string.IsNullOrEmpty(client.BaseAddress.UserInfo)) throw new InvalidOperationException("No incluya credenciales en la URL de la API.");
+if (client.BaseAddress.Scheme != Uri.UriSchemeHttps && !(client.BaseAddress.IsLoopback && client.BaseAddress.Scheme == Uri.UriSchemeHttp))
+    throw new InvalidOperationException("La API remota del agente requiere HTTPS; HTTP solo se permite en loopback.");
 client.DefaultRequestHeaders.Add("X-SRI-Agent-Key", File.ReadAllText(Path.Combine(secretRoot,"agent.key")).Trim());
 using var playwright = await Playwright.CreateAsync();
 var interactive = new InteractiveAgent(playwright, client, root);
+var delivery = new DeliveryClient(client, WindowsDesktopStorage.ForCurrentUser());
+_ = Task.Run(async () => {
+    while (true) {
+        try { await delivery.Tick(CancellationToken.None); }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or System.Text.Json.JsonException) { }
+        await Task.Delay(3000);
+    }
+});
 var registered = false;
 _ = Task.Run(async () => {
     while (true) {

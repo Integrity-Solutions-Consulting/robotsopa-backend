@@ -22,7 +22,12 @@ public sealed class WorkerAuthentication(IStateRepository repository)
     await Task.Delay(1000,cancellation);
     var local=repository.Read(s=>s.Authentications.Single(a=>a.Id==op.Id));
     if(wait>20&&!repository.Read(AuthenticationFlow.AgentOnline))throw new HumanActionRequiredException("El agente Windows se desconectó. La operación se detuvo sin declarar éxito.");
-    if(local.SessionVerified&&local.Status=="Authenticated")return SriPortal.Vault().Load(account.Id,account.TaxId??account.Id);
+    if(local.SessionVerified&&local.Status=="Authenticated") {
+     // En una ejecución nativa la sesión permanece exclusivamente en el navegador del agente.
+     if(executionId is not null && local.Owner=="Agent" && local.BrowserOpened)
+      return new SessionData(account.Id,account.TaxId??account.Id,local.Expires!.Value, "");
+     return SriPortal.Vault().Load(account.Id,account.TaxId??account.Id);
+    }
     if(local.Status=="Cancelled")throw new OperationCanceledException("Ventana SRI cerrada.");
     if(local.Status is "Failed" or "PortalUnavailable" or "PendingValidation")throw new HumanActionRequiredException("No se pudo confirmar el acceso al portal oficial. La consulta sigue pendiente.");
    }

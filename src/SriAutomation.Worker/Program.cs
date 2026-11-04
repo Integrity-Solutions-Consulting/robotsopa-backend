@@ -48,6 +48,12 @@ builder.Services.AddSingleton(new WorkerSettings(statePath));
 var repository = CreateRepository();
 builder.Services.AddSingleton<IStateRepository>(repository);
 var provider = new DocumentStorage(Environment.GetEnvironmentVariable("SRI_OUTPUT_PATH")!,()=>repository.Read(s=>s.Settings.DownloadSubfolder));
+if (string.Equals(Environment.GetEnvironmentVariable("SRI_SHAREPOINT_ENABLED"), "true", StringComparison.OrdinalIgnoreCase))
+{
+    var graph = new SharePointGraphClient(new HttpClient { Timeout = TimeSpan.FromMinutes(4) }, SharePointOptions.FromEnvironment());
+    builder.Services.AddSingleton(new SharePointUploadProcessor(repository, provider, graph));
+    builder.Services.AddHostedService<SharePointBackgroundService>();
+}
 builder.Services.AddSingleton(new JobProcessor(repository, provider, new SriPortal(repository, new DownloadPipeline(repository, provider, new XmlDocumentParser()))));
 builder.Services.AddSingleton(new WorkerAuthentication(repository));
 builder.Services.AddHostedService<SriBackgroundService>();

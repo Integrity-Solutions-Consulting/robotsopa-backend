@@ -144,7 +144,8 @@ public static class AgentEndpoints
             op.VerificationCode=report.ReasonCode;
             if (report.Status == "Cancelled" && report.RemoteLogoutConfirmed) op.Message = "Cierre remoto confirmado en el portal y sesión local revocada.";
             if(report.Status=="QueryCompleted"&&op.ExecutionId is {} completedId&&s.Executions.Single(e=>e.Id==completedId).SriCheckpoint?.Complete!=true)throw new ArgumentException("El bot no confirmó la finalización de las consultas.");
-            op.SessionVerified = report.Status == "Authenticated" && File.Exists(SessionPath(op.Account));
+            // El agente autenticado conserva la sesión en Windows; no se transfiere al servidor.
+            op.SessionVerified = report.Status == "Authenticated" && ((op.Owner == "Agent" && op.ExecutionId is not null && report.BrowserOpened) || File.Exists(SessionPath(op.Account)));
             if (report.Status == "Authenticated" && !op.SessionVerified) throw new ArgumentException("No existe una sesión cifrada.");
             op.Expires = op.SessionVerified ? DateTimeOffset.UtcNow.AddMinutes(10) : null; op.Updated = DateTimeOffset.UtcNow;
             if (op.SessionVerified) op.VerifiedAt = DateTimeOffset.UtcNow;
