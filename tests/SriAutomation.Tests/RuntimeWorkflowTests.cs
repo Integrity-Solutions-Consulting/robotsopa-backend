@@ -72,23 +72,4 @@ public sealed class RuntimeWorkflowTests
         Assert.NotEmpty((await portal.Download(rows[0],"xml",CancellationToken.None))!);Assert.NotEmpty((await portal.Download(rows[0],"pdf",CancellationToken.None))!);
         Assert.True(await portal.Next(CancellationToken.None));Assert.NotEqual(rows[0].Key,(await portal.Rows())[0].Key);Assert.False(await portal.Next(CancellationToken.None));Assert.Equal(2,server.Queries);Assert.Equal(2,server.Files);
     }
-    [Fact]
-    public void NativeTransportCannotFinishAJobOrChangeItsQueryAndRejectsCancelledAccess()
-    {
-        var account=new Account("real-fixture","Ficticia","1790000000001");var state=new State{Accounts=[account]};var query=new Query(account.Id,new(2026,10,12),new(2026,10,12),["Facturas"]);var job=Validation.Enqueue(state,query);job.Status="Running";
-        state.Authentications.Add(new(){Account=account.Id,ExecutionId=job.Id,SessionVerified=true,Expires=DateTimeOffset.UtcNow.AddMinutes(10)});
-        var delta=new State{Executions=[new(){Id=job.Id,Query=query with{Types=["Retenciones"]},Status="Completed",Stage="Querying",Downloaded=1,AttemptedKeys=[PhaseTwoTests.Key]}]};
-        NativeExecution.Apply(state,job.Id,delta);Assert.Equal("Running",job.Status);Assert.Equal(query with{Xml=false},job.Query);Assert.Equal("Querying",job.Stage);Assert.Single(job.Events);
-        job.CancelRequested=true;Assert.Throws<ArgumentException>(()=>NativeExecution.Apply(state,job.Id,delta));
-    }
-    [Fact]
-    public void NativeTransportAcceptsMoreThanTenDistinctDocuments()
-    {
-        var account=new Account("real-fixture","Ficticia","1790000000001");var state=new State{Accounts=[account]};
-        var job=Validation.Enqueue(state,new(account.Id,new(2026,10,12),new(2026,10,12),["Facturas"]));job.Status="Running";
-        state.Authentications.Add(new(){Account=account.Id,ExecutionId=job.Id,SessionVerified=true,Expires=DateTimeOffset.UtcNow.AddMinutes(10)});
-        var keys=Enumerable.Range(1,25).Select(i=>i.ToString().PadLeft(49,'0')).ToList();
-        NativeExecution.Apply(state,job.Id,new State{Executions=[new(){Id=job.Id,Query=job.Query,AttemptedKeys=keys}]});
-        Assert.Equal(25,job.AttemptedKeys.Count);
-    }
 }

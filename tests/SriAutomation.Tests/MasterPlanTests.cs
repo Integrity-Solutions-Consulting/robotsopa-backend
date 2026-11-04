@@ -14,14 +14,6 @@ public sealed class MasterPlanTests
         Assert.Throws<ArgumentException>(()=>SriAutomation.Application.Validation.Next(first,"Custom",0));
         Assert.Throws<ArgumentException>(()=>SriAutomation.Application.Validation.Next(first,"Custom",366));
     }
-    [Fact]
-    public void RepeatedReadyCannotInvalidateAnAccessAlreadyUsedByTheBot()
-    {
-        var s=new SriAutomation.Domain.State{Accounts=[new("fixture","Ficticia","1790000000001")]};
-        s.Authentications.Add(new(){Account="fixture",Status="Authenticated",BrowserOpened=true,SessionVerified=true,Command="Run"});
-        var op=SriAutomation.Application.AuthenticationFlow.Command(s,"fixture","Verify");Assert.Equal("Run",op.Command);Assert.True(op.SessionVerified);
-        Assert.Throws<ArgumentException>(()=>SriAutomation.Application.AuthenticationFlow.Command(s,"fixture","Reload"));
-    }
     [BrowserFact]
     public async Task SsoCanReplaceTheVerifiedTabWithoutLosingTheAuthorizedQueryContext()
     {

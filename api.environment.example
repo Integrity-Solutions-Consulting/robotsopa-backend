@@ -1,4 +1,4 @@
-﻿# API independiente: valores de ejemplo, sin secretos reales.
+# API independiente: valores de ejemplo, sin secretos reales.
 ASPNETCORE_ENVIRONMENT=Production
 ConnectionStrings__DefaultConnection=Host=HOST_INTERNO;Port=5432;Database=bot_db;Username=admin_bot;Password=CONFIGURAR_EN_DOKPLOY
 Cors__AllowedOrigins__0=https://app.ejemplo.com
@@ -8,4 +8,3 @@ SRI_ADMIN_PASSWORD=CAMBIAR_POR_UNA_CLAVE_UNICA_DE_AL_MENOS_16_CARACTERES
 # Opcionales: la imagen ya define las rutas /app y el puerto 8080.
 # SRI_CREDENTIAL_KEY_FILE=/run/secrets/credential.key
 # SRI_CREDENTIAL_KEY_BASE64=BASE64_DE_LA_CLAVE_ORIGINAL_DE_32_BYTES
-# SRI_AGENT_KEY_FILE=/run/secrets/agent.key

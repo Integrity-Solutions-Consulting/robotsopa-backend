@@ -10,7 +10,7 @@ public sealed class PanelDatabase : IPanelDatabase
     public PanelDatabase(string directory)
     {
         Directory.CreateDirectory(directory);
-        connectionString = new SqliteConnectionStringBuilder { DataSource = Path.Combine(directory, "panel.db"), DefaultTimeout = 30 }.ToString();
+        connectionString = new SqliteConnectionStringBuilder { DataSource = Path.Combine(directory, "panel.db"), DefaultTimeout = 30, Pooling = false }.ToString();
         using var db = Open();
         using var cmd = db.CreateCommand();
         cmd.CommandText = "CREATE TABLE IF NOT EXISTS users (username TEXT PRIMARY KEY COLLATE NOCASE, role TEXT NOT NULL, salt BLOB, password_hash BLOB); CREATE TABLE IF NOT EXISTS audit (id TEXT PRIMARY KEY, username TEXT NOT NULL, action TEXT NOT NULL, at TEXT NOT NULL, account TEXT, result TEXT NOT NULL, is_test INTEGER NOT NULL, account_name TEXT);";

@@ -45,11 +45,6 @@ app.Use(async (context, next) =>
     {
         if (context.Request.Path.StartsWithSegments("/api"))
         {
-            if (context.Request.Path.StartsWithSegments("/api/internal/agent"))
-            {
-                if (!AgentEndpoints.Authorized(context)) { context.Response.StatusCode = 401; return; }
-                await next(); return;
-            }
             if (context.Request.Method is not "GET" and not "HEAD" && context.Request.Headers.Origin.FirstOrDefault() is { } origin &&
                 (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || (uri.Authority != context.Request.Host.Value && !allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase)))) { context.Response.StatusCode = 403; return; }
             if (context.Request.Path != "/api/v1/auth/login")
@@ -134,9 +129,7 @@ api.MapPost("/executions/{id}/retry", (string id, IStateRepository r) => r.Updat
     if (old.Status is not "Failed" and not "Cancelled" and not "CompletedWithWarnings") throw new ArgumentException("El trabajo no admite reintento.");
     var next = Validation.Enqueue(s, old.Query); next.ParentExecutionId = old.Id; return next;
 }));
-app.MapAgentEndpoints(api);
-app.MapNativeExecution();
-app.MapLocalDelivery();
+app.MapAccountEndpoints(api);
 app.MapPanelEndpoints(api, database);
 api.MapGet("/configurations", (IStateRepository r, HttpContext c) => r.Read(s => s.Configurations.Where(q => DataScope.Visible(s, q.Account, TestView(c)) && Allowed(c,database,q.Account)).ToList()));
 api.MapPost("/configurations", (Query q, IStateRepository r) => r.Update(s => { Validation.Query(q, s); s.Configurations.Add(q); return q; }));

@@ -1,4 +1,4 @@
-﻿# API independiente en Dokploy (Dockerfile)
+# API independiente en Dokploy (Dockerfile)
 
 Estado: preparación parcial; no se ha verificado el despliegue ni la automatización SRI. Antes de producción valide los permisos, las pruebas y las limitaciones indicadas abajo.
 
@@ -29,8 +29,7 @@ La identidad inicial interna sigue llamándose `Cristopher`: `SRI_ADMIN_USERNAME
 No guarde claves en Git ni en imágenes. Prefiera archivos secretos montados con lectura para UID 1654 y establezca la variable de archivo correspondiente; Base64 en Environment es alternativa. El valor Base64, cuando existe, prevalece sobre el archivo. No genere ni sustituya automáticamente las claves originales: respaldarlas por separado es indispensable para recuperar datos cifrados.
 
 - `SRI_CREDENTIAL_KEY_FILE` apunta a `credential.key` binario de exactamente 32 bytes, o configure `SRI_CREDENTIAL_KEY_BASE64` con esos mismos 32 bytes codificados. Se necesita para leer o guardar credenciales SRI; la API puede arrancar sin ella. Una clave configurada incorrectamente impide arrancar. Conserve la clave original para credenciales existentes.
-- `SRI_SESSION_KEY_FILE` o `SRI_SESSION_KEY_BASE64`: clave binaria de 32 bytes para sesiones SRI cifradas; se requiere al activar el worker y por el agente que las maneja. No es necesaria para iniciar la API. No es la clave de sesión del panel.
-- `SRI_AGENT_KEY_FILE`: archivo de texto con la clave compartida del agente, al menos 64 caracteres; sin él los endpoints internos del agente rechazan solicitudes. No bloquea el arranque. Use la clave original del agente y canal protegido.
+- `SRI_SESSION_KEY_FILE` o `SRI_SESSION_KEY_BASE64`: clave binaria de 32 bytes para sesiones SRI cifradas; se requiere al activar el worker. No es necesaria para iniciar la API. No es la clave de sesión del panel.
 
 ## Persistencia y límites
 
@@ -38,7 +37,7 @@ No guarde claves en Git ni en imágenes. Prefiera archivos secretos montados con
 
 Use una sola réplica API, y como máximo un worker, en el mismo host y con almacenamiento compartido cuyo bloqueo de archivos funcione. SQLite y JSON no proporcionan una cola distribuida ni transacciones conjuntas: no use réplicas distribuidas ni almacenamiento de red sin validación específica. Los cambios en JSON y SQLite pueden quedar desincronizados ante un fallo. Las sesiones del panel están en memoria y se invalidan al reiniciar; varias réplicas no comparten sesiones. El frontend y la API requieren una prueba real de cookies entre sus dominios y configuración del navegador.
 
-El worker no forma parte de esta imagen y la API arranca sin él. El worker comparte estado y documentos con la API; su activación requiere validar recuperación, bloqueo y reintentos antes de producción. El agente local exige Windows y actualmente restringe su URL API a loopback; no está listo para conectarse directamente al dominio público. El perfil de selectores incluido no está verificado y no se afirma que las descargas reales SRI funcionen en Linux ni Windows.
+El Worker comparte PostgreSQL y los volumenes requeridos con la API. Antes de produccion deben validarse recuperacion, exclusividad y reintentos. La descarga real del SRI en Linux sigue pendiente de comprobacion.
 
 Los archivos Compose se conservan para flujos alternativos y locales; no son el método principal aquí. La exposición pública, autorización por cuenta, CSRF, permisos, respaldo y restauración requieren revisión y pruebas antes de usar datos reales.
 

@@ -27,7 +27,7 @@ public sealed class JobProcessor(IStateRepository repository, IStorageProvider s
             foreach (var schedule in s.Schedules.Where(x => x.Enabled && x.Next <= DateTimeOffset.UtcNow))
             {
                 if (s.Executions.Any(e => e.Query.Account == schedule.Query.Account && e.Status is "Pending" or "Running")) continue;
-                var scheduled=Validation.Enqueue(s, schedule.Query);scheduled.RequestedBy=schedule.CreatedBy;
+                var scheduled=Validation.Enqueue(s, schedule.Query.StorageMode == "LOCAL_WINDOWS" ? schedule.Query with { StorageMode = "LEGACY" } : schedule.Query);scheduled.RequestedBy=schedule.CreatedBy;
                 AuditTrail.Add(s,schedule.CreatedBy??"Sistema (programación)","Inicio de ejecución programada",schedule.Query.Account,"Encolada automáticamente por el sistema");
                 do { schedule.Next = Validation.Next(schedule.Next, schedule.Frequency,schedule.IntervalDays); }
                 while (schedule.Next <= DateTimeOffset.UtcNow);
@@ -73,7 +73,7 @@ public sealed class JobProcessor(IStateRepository repository, IStorageProvider s
                 if (execution.Query.Mode == "Stored") { job.Found = documents.Count; job.Processed = documents.Count; }
                 job.Errors = Math.Max(job.Errors, documents.Count(d => d.Status != "ValidadoXML"));
                 job.Status = job.CancelRequested ? "Cancelled" : job.Errors > 0 ? "CompletedWithWarnings" : "Completed";
-                if (!job.CancelRequested && job.Query.StorageMode == "LOCAL_WINDOWS" && s.LocalDeliveries.Any(x => x.ExecutionId == job.Id && x.Status != "Completed")) { job.Status = job.Stage = "WaitingForDelivery"; job.Finished = null; job.Message = "Esperando confirmación del agente Windows."; ExecutionProgress.Set(s,job.Id,job.Stage,job.Message); return true; }
+                if (!job.CancelRequested && job.Query.StorageMode == "LOCAL_WINDOWS" && s.LocalDeliveries.Any(x => x.ExecutionId == job.Id && x.Status != "Completed")) { job.Status = job.Stage = "WaitingForDelivery"; job.Finished = null; job.Message = "Entrega historica pendiente de revision; no se ha confirmado la entrega."; ExecutionProgress.Set(s,job.Id,job.Stage,job.Message); return true; }
                 job.Finished = DateTimeOffset.UtcNow; job.Message = execution.Query.Mode == "Sri" ? "Consultas finalizadas y reportes actualizados desde los archivos almacenados." : "Reportes generados desde documentos almacenados; sin consulta SRI.";
                 job.Stage = job.Status;
                 ExecutionProgress.Set(s,job.Id,job.Status,job.Message);

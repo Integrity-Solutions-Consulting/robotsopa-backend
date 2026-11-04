@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using SriAutomation.Application;
 using SriAutomation.Infrastructure;
 
@@ -17,9 +17,9 @@ public static class AssistantAccess
         bool Has(string? account)=>account is not null && assigned.Contains(account);
         if(p.Length==2 && p[0]=="auth" && (p[1]=="session" || p[1]=="logout" || p[1]=="change-password")) return true;
         if(p.Length==1 && method=="GET" && new[]{"accounts","audit","settings","system","dashboard","executions","documents","schedules","configurations"}.Contains(p[0])) return true;
-        if(p.Length==2 && method=="GET" && (p[0]=="worker" && p[1]=="status" || p[0]=="agent" && p[1]=="status" || p[0]=="portal" && p[1]=="capabilities")) return true;
+        if(p.Length==2 && method=="GET" && (p[0]=="worker" && p[1]=="status" || p[0]=="portal" && p[1]=="capabilities")) return true;
         if(p.Length==1 && p[0]=="settings" && method=="PUT") return true;
-        if(p[0]=="accounts" && p.Length>=3) return Has(p[1]) && ((method=="GET" && p.Length==3 && p[2]=="session") || (method=="POST" && (p[2]=="connect" || p[2]=="authentication" || p[2]=="logout")));
+        if(p[0]=="accounts" && p.Length>=3) return Has(p[1]) && ((method=="GET" && p.Length==3 && p[2]=="session") || (method=="POST" && p[2]=="logout"));
         if(p[0]=="reports" && method=="GET" && p.Length==4) return Has(p[1]);
         if(p[0]=="documents" && p.Length>=3) {
             if(p[1] is "import" or "reindex") return method=="POST" && Has(p[2]);
@@ -27,7 +27,7 @@ public static class AssistantAccess
         }
         if(p[0]=="executions" && p.Length>=2) {
             var account=repository.Read(s=>s.Executions.FirstOrDefault(e=>e.Id==p[1])?.Query.Account);
-            return Has(account) && (method=="GET" && p.Length==2 || method=="POST" && p.Length==3 && new[]{"cancel","resume","retry","ready","show-browser"}.Contains(p[2]));
+            return Has(account) && (method=="GET" && p.Length==2 || method=="POST" && p.Length==3 && new[]{"cancel","resume","retry"}.Contains(p[2]));
         }
         if(p[0]=="schedules" && p.Length>=2) {
             var account=repository.Read(s=>s.Schedules.FirstOrDefault(e=>e.Id==p[1])?.Query.Account);

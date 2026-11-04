@@ -22,35 +22,13 @@ public sealed class SecureWorkflowTests
         Assert.Contains("SRI-VERIFY",AuthenticationFailure.Message("SessionVerification",new TimeoutException(secret)));
     }
     [Fact]
-    public async Task WorkerDelegatesToLocalBrowserAndPreservesRealFailureWithoutLaunchingAnotherLogin()
+    public async Task WorkerRejectsTestAccountBeforeOpeningBrowser()
     {
-        var folder=Path.Combine(Path.GetTempPath(),"sri-delegation-"+Guid.NewGuid().ToString("N"));
-        try {
-            var repository=new JsonStateRepository(folder);
-            var account=new Account("authorized-fixture","Cuenta ficticia","1790000000001");
-            repository.Update(s=>{s.Accounts.Add(account);s.AgentHeartbeat=DateTimeOffset.UtcNow;return true;});
-            var query=new Query(account.Id,new(2026,10,12),new(2026,10,12),["Facturas"]);
-            var job=repository.Update(s=>{var e=Validation.Enqueue(s,query);e.Status="Running";return e;});
-            using var cancellation=new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            var connecting=new WorkerAuthentication(repository).Connect(account,cancellation.Token,job.Id);
-            var delegated=repository.Read(s=>s.Authentications.Single());
-            Assert.Equal("Agent",delegated.Owner);Assert.Equal("Open",delegated.Command);
-            Assert.False(delegated.SessionVerified);
-            Assert.Equal(job.Id,delegated.ExecutionId);
-            Assert.Equal("OpeningBrowser",repository.Read(s=>s.Executions.Single().Stage));
-            Assert.False(connecting.IsCompleted);
-            repository.Update(s=>{s.Authentications.Single().BrowserOpened=true;AuthenticationFlow.ReadyExecution(s,job.Id);return true;});
-            Assert.Equal("Verify",repository.Read(s=>s.Authentications.Single().Command));
-            Assert.False(connecting.IsCompleted);
-            Assert.False(repository.Read(s=>s.Authentications.Single().SessionVerified));
-            Assert.Equal(query with{Xml=false},repository.Read(s=>s.Executions.Single().Query) with{Types=query.Types});
-            repository.Update(s=>{s.Executions.Single().CancelRequested=true;return true;});
-            Assert.Throws<ArgumentException>(()=>repository.Update(s=>{AuthenticationFlow.ReadyExecution(s,job.Id);return true;}));
-            repository.Update(s=>{s.Authentications.Single().Status="PortalUnavailable";return true;});
-            await Assert.ThrowsAsync<HumanActionRequiredException>(()=>connecting);
-            Assert.Single(repository.Read(s=>s.Authentications));
-            Assert.False(repository.Read(s=>s.Authentications.Single().SessionVerified));
-        }finally{if(Directory.Exists(folder))Directory.Delete(folder,true);}
+        var folder=Path.Combine(Path.GetTempPath(),"sri-worker-"+Guid.NewGuid().ToString("N"));
+        try { var repo=new JsonStateRepository(folder); var account=new Account("test","Prueba","1790000000001",true);
+            await Assert.ThrowsAsync<HumanActionRequiredException>(()=>new WorkerAuthentication(repo).Connect(account,CancellationToken.None));
+            Assert.Empty(repo.Read(s=>s.Authentications));
+        } finally { if(Directory.Exists(folder)) Directory.Delete(folder,true); }
     }
     [Fact]
     public void MultipleTypesAndRangesPersistAndRejectDuplicates()
