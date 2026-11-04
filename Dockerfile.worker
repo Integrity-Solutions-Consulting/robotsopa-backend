@@ -8,5 +8,7 @@ COPY --from=build /out/.playwright /app/.playwright
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN /app/.playwright/node/linux-x64/node /app/.playwright/package/cli.js install --with-deps chromium
 COPY --from=build /out .
+COPY config/sri-portal.json /app/config/sri-portal.json
+ENV SRI_PORTAL_PROFILE=/app/config/sri-portal.json
 HEALTHCHECK --interval=15s --timeout=5s --start-period=30s CMD ["dotnet", "SriAutomation.Worker.dll", "--health"]
 ENTRYPOINT ["dotnet", "SriAutomation.Worker.dll"]

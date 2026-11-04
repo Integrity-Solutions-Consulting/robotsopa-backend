@@ -12,12 +12,12 @@ IStateRepository CreateRepository() => postgresConnection is null ? new JsonStat
 
 if (args.Contains("--health"))
 {
-    if (string.Equals(Environment.GetEnvironmentVariable("SRI_WORKER_PAUSED"), "true", StringComparison.OrdinalIgnoreCase)) return;
+    if (string.Equals(Environment.GetEnvironmentVariable("SRI_WORKER_PAUSED"), "true", StringComparison.OrdinalIgnoreCase)) { Environment.ExitCode = 1; return; }
     var healthRepository = CreateRepository();
     Environment.ExitCode = healthRepository.Read(s => s.WorkerHeartbeat > DateTimeOffset.UtcNow.AddSeconds(-30)) ? 0 : 1;
     return;
 }
-if (args.Contains("--probe")) { await PortalProbe.Run("docs/sri-public-controls.json"); return; }
+if (args.Contains("--probe")) { var probeDirectory = Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage"); Directory.CreateDirectory(probeDirectory); await PortalProbe.Run(Path.Combine(probeDirectory, "sri-public-controls.json")); return; }
 if (args.Contains("--revoke-session")) { var i = Array.IndexOf(args, "--revoke-session"); SriPortal.Vault().Revoke(args[i + 1]); return; }
 if (args.Contains("--logout"))
 {
@@ -56,5 +56,6 @@ if (string.Equals(Environment.GetEnvironmentVariable("SRI_SHAREPOINT_ENABLED"), 
 }
 builder.Services.AddSingleton(new JobProcessor(repository, provider, new SriPortal(repository, new DownloadPipeline(repository, provider, new XmlDocumentParser()))));
 builder.Services.AddSingleton(new WorkerAuthentication(repository));
+builder.Services.AddHostedService<WorkerHeartbeatService>();
 builder.Services.AddHostedService<SriBackgroundService>();
 await builder.Build().RunAsync();

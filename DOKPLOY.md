@@ -41,3 +41,10 @@ Use una sola réplica API, y como máximo un worker, en el mismo host y con alma
 El worker no forma parte de esta imagen y la API arranca sin él. El worker comparte estado y documentos con la API; su activación requiere validar recuperación, bloqueo y reintentos antes de producción. El agente local exige Windows y actualmente restringe su URL API a loopback; no está listo para conectarse directamente al dominio público. El perfil de selectores incluido no está verificado y no se afirma que las descargas reales SRI funcionen en Linux ni Windows.
 
 Los archivos Compose se conservan para flujos alternativos y locales; no son el método principal aquí. La exposición pública, autorización por cuenta, CSRF, permisos, respaldo y restauración requieren revisión y pruebas antes de usar datos reales.
+
+
+## Worker y progreso
+
+El Dockerfile de API no ejecuta el Worker. Para procesar trabajos despliegue además el servicio `worker` de `compose.dokploy.yml` desde este repositorio, o una aplicación independiente usando `Dockerfile.worker` y contexto `.`. Use una sola instancia y la misma `ConnectionStrings__DefaultConnection` que la API, con la base ya inicializada. Comparta `/app/storage`, `/app/downloads` y `/app/sessions` con la API; monte el perfil y la clave de sesión original como indica Compose. El Worker necesita acceso de escritura al estado PostgreSQL y a esos vol?menes. Configure `SRI_WORKER_PAUSED=false` para habilitar el procesamiento: Compose deja la pausa activada por defecto. Ajuste también las variables de SharePoint cuando corresponda. No sustituya claves ni borre datos existentes.
+
+El heartbeat se actualiza cada cinco segundos mientras el proceso puede escribir en PostgreSQL. El estado en la interfaz usa un umbral de 15 segundos; el healthcheck del contenedor usa 30 segundos y considera no saludable un Worker pausado. Confirme en Dokploy que el servicio existe y revise sus logs, conectividad y montajes: el estado local de este repositorio no demuestra qué contenedores están desplegados. La barra de Historial cuenta consultas SRI confirmadas, no la finalización de las descargas, reportes o entregas.

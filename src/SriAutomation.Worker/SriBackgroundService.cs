@@ -21,3 +21,17 @@ public sealed class SriBackgroundService(JobProcessor processor, WorkerAuthentic
         }
     }
 }
+
+// El pulso es independiente de la duración de la autenticación y de cada trabajo.
+public sealed class WorkerHeartbeatService(SriAutomation.Application.IStateRepository repository, ILogger<WorkerHeartbeatService> logger) : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try { repository.Update(s => { s.WorkerHeartbeat = DateTimeOffset.UtcNow; return true; }); }
+            catch (Exception ex) { logger.LogError(ex, "No se pudo actualizar el heartbeat del Worker en PostgreSQL."); }
+            await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+        }
+    }
+}
