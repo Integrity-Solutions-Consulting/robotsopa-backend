@@ -109,6 +109,9 @@ public sealed class Schedule
 }
 public sealed class State
 {
+    // Preserve fields written by newer or external components when state is rewritten.
+    [System.Text.Json.Serialization.JsonExtensionData]
+    public Dictionary<string, System.Text.Json.JsonElement>? AdditionalData { get; set; }
     public string AuthenticationMode { get; set; } = "";
     public List<AuditEvent> Audit { get; set; } = [];
     public PanelSettings Settings { get; set; } = new();

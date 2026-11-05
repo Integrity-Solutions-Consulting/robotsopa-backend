@@ -28,6 +28,7 @@ public sealed class PostgresStateRepository(string connectionString) : IStateRep
         using var transaction = connection.BeginTransaction();
         using var select = new NpgsqlCommand("SELECT payload::text FROM app_state WHERE id = 1 FOR UPDATE", connection, transaction);
         var state = Deserialize(select.ExecuteScalar());
+        var accountsBefore = state.Accounts.ToList();
         using var active = new NpgsqlCommand("SELECT job_id FROM execution_ownership WHERE coordination_state='leased'", connection, transaction);
         using var reader = active.ExecuteReader();
         var leasedIds = new List<string>();
@@ -46,7 +47,7 @@ public sealed class PostgresStateRepository(string connectionString) : IStateRep
             job.CancelRequested = requested;
             if (!unchanged || (previous.CancelRequested && !requested)) throw new InvalidOperationException("A leased execution requires its ownership token.");
         }
-        PostgresPanelDatabase.SyncAccounts(connection, transaction, state.Accounts);
+        PostgresPanelDatabase.ApplyAccountChanges(connection, transaction, accountsBefore, state.Accounts);
         PostgresPanelDatabase.SyncAudit(connection, transaction, state.Audit);
         using var update = new NpgsqlCommand("UPDATE app_state SET payload = @payload::jsonb WHERE id = 1", connection, transaction);
         update.Parameters.AddWithValue("payload", NpgsqlDbType.Text, JsonSerializer.Serialize(state, Options));
@@ -61,6 +62,7 @@ public sealed class PostgresStateRepository(string connectionString) : IStateRep
         using var transaction = connection.BeginTransaction();
         using var select = new NpgsqlCommand("SELECT payload::text FROM app_state WHERE id=1 FOR UPDATE", connection, transaction);
         var state = Deserialize(select.ExecuteScalar());
+        var accountsBefore = state.Accounts.ToList();
         using var check = new NpgsqlCommand("SELECT 1 FROM execution_ownership WHERE job_id=@job AND worker_id=@worker AND lease_id=@lease AND fencing_token=@token AND coordination_state='leased' AND lease_expires_at>clock_timestamp() FOR UPDATE", connection, transaction);
         check.Parameters.AddWithValue("job", ownership.JobId); check.Parameters.AddWithValue("worker", ownership.WorkerId); check.Parameters.AddWithValue("lease", ownership.LeaseId); check.Parameters.AddWithValue("token", ownership.FencingToken);
         if (check.ExecuteScalar() is null) throw new InvalidOperationException("Execution ownership has expired or changed.");
@@ -74,7 +76,7 @@ public sealed class PostgresStateRepository(string connectionString) : IStateRep
         var ownedAfter = state.Executions.Single(e => e.Id == ownership.JobId);
         if ((cancellationRequested && !ownedAfter.CancelRequested) || JsonSerializer.Serialize(ownedAfter.Query, Options) != originalQuery)
             throw new InvalidOperationException("Ownership cannot clear cancellation or change the execution query.");
-        PostgresPanelDatabase.SyncAccounts(connection, transaction, state.Accounts);
+        PostgresPanelDatabase.ApplyAccountChanges(connection, transaction, accountsBefore, state.Accounts);
         PostgresPanelDatabase.SyncAudit(connection, transaction, state.Audit);
         using var update = new NpgsqlCommand("UPDATE app_state SET payload=@payload::jsonb WHERE id=1", connection, transaction);
         update.Parameters.AddWithValue("payload", NpgsqlDbType.Text, JsonSerializer.Serialize(state, Options));

@@ -1,0 +1,7 @@
+# Cuentas PostgreSQL
+
+La aplicación mantiene dos representaciones. `app_state.payload.accounts` es la fuente usada por API y Worker para listar cuentas, validar trabajos y obtener datos de procesamiento. `panel_accounts` conserva el estado de acceso del panel y las referencias de asignaciones y entregas. Una cuenta que solo exista en `panel_accounts` se conserva, pero no aparece automáticamente en la lista ni puede procesarse como cuenta de `app_state`.
+
+Las actualizaciones del estado comparan la lista anterior y posterior de cuentas. Solo las altas, cambios y bajas presentes en esa operación se reflejan en el panel. Una cuenta ajena a esa lista no se desactiva; una cuenta sin cambios no se sobrescribe. Un alta que choque con un ID del panel o un cambio o baja cuyo registro anterior no coincida con el panel se rechaza y revierte la transacción; requiere reconciliación explícita, no una importación automática. La baja solicitada a través del endpoint de cuentas desactiva en el panel la cuenta correspondiente y conserva la fila y sus referencias.
+
+Antes de habilitar el procesamiento sobre una base existente, comparar en solo lectura los ID, nombres, RUC y marcas de ambas representaciones y decidir cómo reconciliar las diferencias. No ejecutar la inicialización ni una migración para resolver diferencias de datos sin revisar su contenido. Los datos de `app_state` y del panel pueden contener información sensible.

@@ -105,12 +105,46 @@ public sealed class PostgresPanelDatabase(string connectionString) : IPanelDatab
     public void SyncAccounts(IEnumerable<Account> accounts) { using var db = Open(); using var tx = db.BeginTransaction(); SyncAccounts(db, tx, accounts); tx.Commit(); }
     internal static void SyncAccounts(NpgsqlConnection db, NpgsqlTransaction tx, IEnumerable<Account> accounts)
     {
-        using (var reset = new NpgsqlCommand("UPDATE panel_accounts SET active=false", db, tx)) reset.ExecuteNonQuery();
         foreach (var account in accounts)
         {
-            using var cmd = new NpgsqlCommand("INSERT INTO panel_accounts(id,name,tax_id,active,is_test) VALUES(@id,@name,@tax,true,@test) ON CONFLICT(id) DO UPDATE SET name=excluded.name,tax_id=excluded.tax_id,active=true,is_test=excluded.is_test", db, tx);
+            using var cmd = new NpgsqlCommand("INSERT INTO panel_accounts(id,name,tax_id,active,is_test) VALUES(@id,@name,@tax,true,@test) ON CONFLICT(id) DO NOTHING", db, tx);
             cmd.Parameters.AddWithValue("id", account.Id); cmd.Parameters.AddWithValue("name", account.Name); cmd.Parameters.AddWithValue("tax", NpgsqlTypes.NpgsqlDbType.Text, (object?)account.TaxId ?? DBNull.Value); cmd.Parameters.AddWithValue("test", account.IsTest); cmd.ExecuteNonQuery();
         }
+    }
+    internal static void ApplyAccountChanges(NpgsqlConnection db, NpgsqlTransaction tx, IReadOnlyList<Account> before, IReadOnlyList<Account> after)
+    {
+        var previous = before.ToDictionary(a => a.Id, StringComparer.Ordinal);
+        var current = after.ToDictionary(a => a.Id, StringComparer.Ordinal);
+        foreach (var account in after)
+        {
+            if (!previous.TryGetValue(account.Id, out var old))
+            {
+                using var insert = new NpgsqlCommand("INSERT INTO panel_accounts(id,name,tax_id,active,is_test) VALUES(@id,@name,@tax,true,@test) ON CONFLICT(id) DO NOTHING", db, tx);
+                AddAccountParameters(insert, account);
+                if (insert.ExecuteNonQuery() != 1) throw new InvalidOperationException($"La cuenta {account.Id} ya existe en panel_accounts; revise la discrepancia antes de modificarla.");
+            }
+            else if (old != account)
+            {
+                using var update = new NpgsqlCommand("UPDATE panel_accounts SET name=@name,tax_id=@tax,is_test=@test WHERE id=@id AND active AND name=@oldname AND tax_id IS NOT DISTINCT FROM @oldtax AND is_test=@oldtest", db, tx);
+                AddAccountParameters(update, account); AddPreviousParameters(update, old);
+                if (update.ExecuteNonQuery() != 1) throw new InvalidOperationException($"La cuenta {account.Id} difiere entre app_state y panel_accounts; no se sobrescribió.");
+            }
+        }
+        foreach (var old in before.Where(a => !current.ContainsKey(a.Id)))
+        {
+            using var deactivate = new NpgsqlCommand("UPDATE panel_accounts SET active=false WHERE id=@id AND active AND name=@oldname AND tax_id IS NOT DISTINCT FROM @oldtax AND is_test=@oldtest", db, tx);
+            deactivate.Parameters.AddWithValue("id", old.Id); AddPreviousParameters(deactivate, old);
+            if (deactivate.ExecuteNonQuery() != 1) throw new InvalidOperationException($"La cuenta {old.Id} difiere entre app_state y panel_accounts; no se desactivó.");
+        }
+    }
+    private static void AddAccountParameters(NpgsqlCommand cmd, Account account)
+    {
+        cmd.Parameters.AddWithValue("id", account.Id); cmd.Parameters.AddWithValue("name", account.Name);
+        cmd.Parameters.AddWithValue("tax", NpgsqlTypes.NpgsqlDbType.Text, (object?)account.TaxId ?? DBNull.Value); cmd.Parameters.AddWithValue("test", account.IsTest);
+    }
+    private static void AddPreviousParameters(NpgsqlCommand cmd, Account account)
+    {
+        cmd.Parameters.AddWithValue("oldname", account.Name); cmd.Parameters.AddWithValue("oldtax", NpgsqlTypes.NpgsqlDbType.Text, (object?)account.TaxId ?? DBNull.Value); cmd.Parameters.AddWithValue("oldtest", account.IsTest);
     }
     public void SyncAudit(IEnumerable<AuditEvent> events) { using var db = Open(); using var tx = db.BeginTransaction(); SyncAudit(db, tx, events); tx.Commit(); }
     internal static void SyncAudit(NpgsqlConnection db, NpgsqlTransaction tx, IEnumerable<AuditEvent> events)

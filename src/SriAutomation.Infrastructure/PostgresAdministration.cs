@@ -25,11 +25,80 @@ public static class PostgresAdministration
     public static void Verify(string connectionString)
     {
         using var db = new NpgsqlConnection(connectionString); db.Open();
-        using var cmd = new NpgsqlCommand("SELECT (SELECT count(*) FROM sri_schema_migrations WHERE version IN (2,3,4))=3 AND EXISTS (SELECT 1 FROM app_state WHERE id=1) AND EXISTS (SELECT 1 FROM panel_users WHERE role='admin' AND password_hash IS NOT NULL)", db);
-        if (cmd.ExecuteScalar() is not true) throw new InvalidOperationException("La base no está inicializada.");
-        // Resolve every column used by the repositories, without modifying data.
-        using var schema = new NpgsqlCommand("SELECT id,payload FROM app_state LIMIT 0; SELECT username,role,salt,password_hash,must_change FROM panel_users LIMIT 0; SELECT id,name,tax_id,active,is_test FROM panel_accounts LIMIT 0; SELECT username,account_id FROM panel_assignments LIMIT 0; SELECT username,default_account,download_subfolder FROM panel_preferences LIMIT 0; SELECT id,username,action,occurred_at,account_id,result,is_test,account_name FROM panel_audit LIMIT 0", db);
-        using var reader = schema.ExecuteReader();
-        while (reader.NextResult()) { }
+        foreach (var (table, columns) in RequiredColumns)
+        {
+            using var relation = new NpgsqlCommand("SELECT to_regclass(@name)", db);
+            relation.Parameters.AddWithValue("name", table);
+            if (relation.ExecuteScalar() is null or DBNull) throw new InvalidOperationException($"Esquema PostgreSQL incompatible: falta la tabla {table}.");
+            foreach (var (column, type) in columns)
+            {
+                using var check = new NpgsqlCommand("SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid=to_regclass(@table) AND attname=@column AND attnum>0 AND NOT attisdropped", db);
+                check.Parameters.AddWithValue("table", table); check.Parameters.AddWithValue("column", column);
+                var actual = check.ExecuteScalar() as string;
+                if (actual is null) throw new InvalidOperationException($"Esquema PostgreSQL incompatible: falta la columna {table}.{column}.");
+                if (actual != type && !(type == "text" && (actual == "character varying" || actual.StartsWith("character varying(", StringComparison.Ordinal))))
+                    throw new InvalidOperationException($"Esquema PostgreSQL incompatible: {table}.{column} tiene tipo {actual}; se requiere {type}.");
+            }
+        }
+        foreach (var (table, privilege) in RequiredPrivileges)
+        {
+            foreach (var operation in privilege.Split(", "))
+            {
+                using var check = new NpgsqlCommand("SELECT has_table_privilege(to_regclass(@table), @privilege)", db);
+                check.Parameters.AddWithValue("table", table); check.Parameters.AddWithValue("privilege", operation);
+                if (check.ExecuteScalar() is not true) throw new InvalidOperationException($"Permiso PostgreSQL ausente: {operation} en {table}.");
+            }
+        }
+        foreach (var (table, keys) in RequiredUniqueKeys)
+        {
+            using var check = new NpgsqlCommand("""
+                SELECT EXISTS (SELECT 1 FROM pg_index i
+                    WHERE i.indrelid=to_regclass(@table) AND i.indisunique AND i.indisvalid AND i.indimmediate
+                      AND i.indpred IS NULL AND i.indnkeyatts=cardinality(@keys)
+                      AND ARRAY(SELECT pg_get_indexdef(i.indexrelid, n, true) FROM generate_series(1, i.indnkeyatts) n ORDER BY 1)
+                        = ARRAY(SELECT k FROM unnest(@keys) k ORDER BY k))
+                """, db);
+            check.Parameters.AddWithValue("table", table); check.Parameters.AddWithValue("keys", keys);
+            if (check.ExecuteScalar() is not true) throw new InvalidOperationException($"Esquema PostgreSQL incompatible: falta un índice único válido en {table} ({string.Join(", ", keys)}).");
+        }
+        using var state = new NpgsqlCommand("SELECT payload::text FROM app_state WHERE id=1", db);
+        if (state.ExecuteScalar() is not string payload) throw new InvalidOperationException("Falta la configuración app_state con id=1.");
+        try
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(payload);
+            if (json.RootElement.ValueKind != System.Text.Json.JsonValueKind.Object) throw new InvalidOperationException("app_state.payload debe contener un objeto JSON.");
+        }
+        catch (System.Text.Json.JsonException ex) { throw new InvalidOperationException("app_state.payload no contiene JSON válido.", ex); }
+        using var admin = new NpgsqlCommand("SELECT EXISTS (SELECT 1 FROM panel_users WHERE role='admin' AND salt IS NOT NULL AND octet_length(salt)>0 AND password_hash IS NOT NULL AND octet_length(password_hash)=32)", db);
+        if (admin.ExecuteScalar() is not true) throw new InvalidOperationException("Falta un administrador válido en panel_users (salt y password_hash requeridos).");
     }
+
+    private static readonly (string Table, string Privilege)[] RequiredPrivileges =
+    [
+        ("app_state", "SELECT, UPDATE"), ("execution_ownership", "SELECT, INSERT, UPDATE"),
+        ("panel_users", "SELECT, INSERT, UPDATE"), ("panel_accounts", "SELECT, INSERT, UPDATE"),
+        ("panel_assignments", "SELECT, INSERT, DELETE"), ("panel_preferences", "SELECT, INSERT, UPDATE"),
+        ("panel_audit", "SELECT, INSERT"), ("remote_deliveries", "SELECT, INSERT, UPDATE"),
+        ("delivery_agents", "SELECT, INSERT, UPDATE")
+    ];
+
+    private static readonly (string Table, string[] Keys)[] RequiredUniqueKeys =
+    [
+        ("execution_ownership", ["job_id"]), ("panel_users", ["lower(username)"]),
+        ("panel_preferences", ["username"]), ("panel_accounts", ["id"]),
+        ("remote_deliveries", ["username", "document_id", "kind", "sha256"])
+    ];
+
+    private static readonly (string Table, (string Column, string Type)[] Columns)[] RequiredColumns =
+    [
+        ("app_state", [("id", "smallint"), ("payload", "jsonb")]),
+        ("panel_users", [("username", "text"), ("role", "text"), ("salt", "bytea"), ("password_hash", "bytea"), ("must_change", "boolean")]),
+        ("panel_accounts", [("id", "text"), ("name", "text"), ("tax_id", "text"), ("active", "boolean"), ("is_test", "boolean")]),
+        ("panel_assignments", [("username", "text"), ("account_id", "text")]),
+        ("panel_preferences", [("username", "text"), ("default_account", "text"), ("download_subfolder", "text")]),
+        ("panel_audit", [("id", "text"), ("username", "text"), ("action", "text"), ("occurred_at", "timestamp with time zone"), ("account_id", "text"), ("result", "text"), ("is_test", "boolean"), ("account_name", "text")]),
+        ("execution_ownership", [("job_id", "text"), ("worker_id", "text"), ("lease_id", "uuid"), ("fencing_token", "bigint"), ("lease_expires_at", "timestamp with time zone"), ("coordination_state", "text"), ("attempts", "integer"), ("acquired_at", "timestamp with time zone"), ("renewed_at", "timestamp with time zone"), ("updated_at", "timestamp with time zone")]),
+        ("remote_deliveries", [("id", "uuid"), ("username", "text"), ("account_id", "text"), ("document_id", "text"), ("kind", "text"), ("source_path", "text"), ("destination_path", "text"), ("sha256", "text"), ("status", "text"), ("attempts", "integer"), ("last_error", "text"), ("created_at", "timestamp with time zone"), ("delivered_at", "timestamp with time zone")]),
+        ("delivery_agents", [("id", "uuid"), ("username", "text"), ("label", "text"), ("secret_hash", "bytea"), ("created_at", "timestamp with time zone"), ("revoked_at", "timestamp with time zone"), ("last_seen_at", "timestamp with time zone")])
+    ];
 }
