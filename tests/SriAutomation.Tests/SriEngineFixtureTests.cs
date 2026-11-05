@@ -9,13 +9,13 @@ namespace SriAutomation.Tests;
 
 public sealed class SriEngineFixtureTests
 {
-    private const string Html = """
+    internal const string Html = """
         <!doctype html><html><body><div id="authenticated">Sesión fixture</div><span id="account">1790000000001</span><div id="login" hidden>Login fixture</div><div id="challenge" hidden>Verificación fixture</div>
         <input id="date"><select id="type"><option value="01">Factura</option></select><button id="search" onclick="current=0;load()">Consultar</button>
         <div id="busy" hidden>Cargando</div><div id="ready"><table><tbody></tbody></table><div id="empty" hidden>Sin documentos</div></div><button id="next" onclick="current++;load()">Siguiente</button>
         <script>let current=0;async function load(){document.querySelector('#busy').hidden=false;const response=await fetch('/query',{method:'POST',body:JSON.stringify({page:current,date:document.querySelector('#date').value})});const data=await response.json();document.querySelector('tbody').innerHTML=data.keys.map(key=>`<tr><td class="key">${key}</td><td class="issued">12/09/2026</td><td><a class="xml" href="/files/${key}.xml" download>XML</a><a class="pdf" href="/files/${key}.pdf" download>PDF</a></td></tr>`).join('');document.querySelector('#empty').hidden=data.keys.length>0;document.querySelector('#next').disabled=!data.next;document.querySelector('#busy').hidden=true;}</script></body></html>
         """;
-    private static PortalProfile Profile() => new()
+    internal static PortalProfile Profile() => new()
     {
         Url = "https://fixture.invalid/",
         Verified = true,

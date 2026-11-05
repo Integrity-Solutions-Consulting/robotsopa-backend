@@ -16,7 +16,14 @@ public static class NativeExecution
     }
     public static void Apply(State state,string id,State delta)
     {
-        var job=Authorized(state,id);var update=delta.Executions.Single(e=>e.Id==id);
+        _ = Authorized(state,id); ApplyRemote(state,id,delta);
+    }
+    // Called only inside a transaction that has already checked execution ownership.
+    public static void ApplyRemote(State state,string id,State delta)
+    {
+        var job=state.Executions.Single(e=>e.Id==id);
+        if(job.Status!="Running"||job.CancelRequested)throw new ArgumentException("La ejecución no está activa.");
+        var update=delta.Executions.Single(e=>e.Id==id);
         if(update.AttemptedKeys.Any(k=>k.Length!=49||!k.All(char.IsAsciiDigit)))throw new ArgumentException("Claves inválidas.");
         if(update.Queries.Any(q=>q.Date<job.Query.From||q.Date>job.Query.To||!job.Query.Types.Contains(q.Type)))throw new ArgumentException("Resultado fuera del alcance solicitado.");
         job.SriCheckpoint=update.SriCheckpoint;job.Queries=update.Queries;job.AttemptedKeys=job.AttemptedKeys.Union(update.AttemptedKeys).ToList();

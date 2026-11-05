@@ -32,7 +32,15 @@ public sealed class RemoteDeliveryStore(string connectionString)
     public IReadOnlyList<PendingRemoteDelivery> Pending(string username)
     {
         using var db = new NpgsqlConnection(connectionString); db.Open();
-        using var cmd = new NpgsqlCommand($"SELECT d.id,d.account_id,d.document_id,d.kind,d.destination_path,d.sha256,d.attempts FROM remote_deliveries d WHERE {Authorized} AND d.status='Pending' ORDER BY d.created_at,d.id LIMIT 100", db);
+        using var cmd = new NpgsqlCommand($"""
+            SELECT d.id,d.account_id,d.document_id,d.kind,d.destination_path,d.sha256,d.attempts
+            FROM remote_deliveries d WHERE {Authorized} AND d.status='Pending'
+              AND (d.kind <> 'xlsx' OR NOT EXISTS (
+                SELECT 1 FROM remote_deliveries newer
+                WHERE newer.username=d.username AND newer.document_id=d.document_id AND newer.kind=d.kind
+                  AND (newer.created_at,newer.id) > (d.created_at,d.id)))
+            ORDER BY d.created_at,d.id LIMIT 100
+            """, db);
         cmd.Parameters.AddWithValue("username", username);
         using var reader = cmd.ExecuteReader(); var result = new List<PendingRemoteDelivery>();
         while (reader.Read()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetInt32(6)));

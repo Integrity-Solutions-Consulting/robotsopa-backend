@@ -123,6 +123,9 @@ public class JobProcessor(IStateRepository repository, IStorageProvider storage,
             repository.Update(s => { s.Executions.Single(e => e.Id == execution.Id).Stage = "Processing"; return true; });
             var documents = repository.Read(s => s.Documents.Where(d => d.Account == execution.Query.Account && d.Issued >= execution.Query.From && d.Issued <= execution.Query.To && execution.Query.Types.Contains(d.Type)).ToList());
             var months=documents.Select(d=>(d.Issued.Year,d.Issued.Month)).ToHashSet();
+            if (execution.Query.Mode == "Sri")
+                for (var month = new DateOnly(execution.Query.From.Year, execution.Query.From.Month, 1); month <= execution.Query.To; month = month.AddMonths(1))
+                    months.Add((month.Year, month.Month));
 
             foreach (var month in months.OrderBy(m=>m.Year).ThenBy(m=>m.Month))
             {

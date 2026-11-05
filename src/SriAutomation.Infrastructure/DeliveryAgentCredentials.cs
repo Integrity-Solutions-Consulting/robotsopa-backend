@@ -51,6 +51,14 @@ public sealed class DeliveryAgentCredentials(string connectionString)
         cmd.Parameters.AddWithValue("id", id); cmd.Parameters.AddWithValue("username", username);
         return cmd.ExecuteNonQuery() == 1;
     }
+
+    public bool CanAccess(string username, string account)
+    {
+        using var db = new NpgsqlConnection(connectionString); db.Open();
+        using var cmd = new NpgsqlCommand("SELECT EXISTS(SELECT 1 FROM panel_users u JOIN panel_accounts a ON a.id=@account AND a.active WHERE u.username=@username AND u.password_hash IS NOT NULL AND (u.role='admin' OR EXISTS(SELECT 1 FROM panel_assignments x WHERE x.username=u.username AND x.account_id=a.id)))", db);
+        cmd.Parameters.AddWithValue("username", username); cmd.Parameters.AddWithValue("account", account);
+        return cmd.ExecuteScalar() is true;
+    }
 }
 
 public sealed record DeliveryAgentInfo(Guid Id, string Label, DateTime CreatedAt, DateTime? RevokedAt, DateTime? LastSeenAt);

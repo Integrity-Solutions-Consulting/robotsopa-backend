@@ -135,6 +135,10 @@ if (postgresConnection is not null)
         if (!Guid.TryParse(context.Request.Headers["X-Delivery-Agent-Id"].ToString(), out var id)) return null;
         return agentCredentials.Authenticate(id, context.Request.Headers["X-Delivery-Agent-Secret"].ToString());
     }
+    var remoteExecutionEnabled = string.Equals(Environment.GetEnvironmentVariable("SRI_REMOTE_EXECUTION_ENABLED"), "true", StringComparison.OrdinalIgnoreCase);
+    RemoteAgentStatus.Map(app, AgentUser, remoteExecutionEnabled);
+    if (remoteExecutionEnabled)
+        RemoteExecutionEndpoints.Map(app, postgresConnection, AgentUser, agentCredentials.CanAccess);
     app.MapGet("/delivery-agent/v1/pending", (HttpContext context) =>
     {
         var username = AgentUser(context);
@@ -202,7 +206,12 @@ api.MapPost("/assignments", (RucAssignment assignment,HttpContext c) => { if(c.I
 api.MapGet("/accounts", (IStateRepository r, HttpContext c) => r.Read(s => s.Accounts.Where(a => (!a.IsTest || TestView(c)) && Allowed(c,database,a.Id)).ToList()));
 api.MapPost("/accounts", (Account a, IStateRepository r, HttpContext c) => r.Update(s => { a = a with { IsTest = a.IsTest || TestView(c) }; Validation.Identifier(a.Id); if (!string.IsNullOrEmpty(a.TaxId) && (a.TaxId.Length != 13 || !a.TaxId.All(char.IsAsciiDigit))) throw new ArgumentException("RUC inválido."); if (string.IsNullOrWhiteSpace(a.Name) || a.Name.Length > 150 || s.Accounts.Any(x => x.Id == a.Id)) throw new ArgumentException("Nombre inválido o cuenta existente."); s.Accounts.Add(a); return a; }));
 api.MapGet("/dashboard", (IStateRepository r, IStorageProvider storage, HttpContext c) => r.Read(s => DashboardData.Build(s, storage, TestView(c), c.Items["PanelRole"] as string == "admin" ? null : database.AssignedAccounts((string)c.Items["PanelUser"]!))));
-api.MapGet("/worker/status", (IStateRepository r) => r.Read(s => new { online = s.WorkerHeartbeat > DateTimeOffset.UtcNow.AddSeconds(-15), heartbeat = s.WorkerHeartbeat }));
+api.MapGet("/worker/status", (IStateRepository r) => r.Read(s => {
+    var remote = string.Equals(Environment.GetEnvironmentVariable("SRI_REMOTE_EXECUTION_ENABLED"), "true", StringComparison.OrdinalIgnoreCase);
+    var heartbeat = remote ? s.AgentHeartbeat : s.WorkerHeartbeat;
+    return new { online = heartbeat > DateTimeOffset.UtcNow.AddSeconds(-15), heartbeat };
+}));
+api.MapGet("/agent/status", (IStateRepository r) => r.Read(s => new { online = s.AgentHeartbeat > DateTimeOffset.UtcNow.AddSeconds(-15), heartbeat = s.AgentHeartbeat }));
 api.MapGet("/system", (IStorageProvider storage) => { storage.CheckAccess(); return new { outputPath = output, outputHostPath = Environment.GetEnvironmentVariable("SRI_OUTPUT_HOST_PATH"), timezone = "America/Guayaquil", sri = PortalReadiness.Status(Environment.GetEnvironmentVariable("SRI_PORTAL_PROFILE") ?? Path.GetFullPath("config/sri-portal.json")), types = Validation.Types }; });
 api.MapGet("/executions", (IStateRepository r, HttpContext c) => r.Read(s => s.Executions.Where(e => DataScope.Visible(s, e.Query.Account, TestView(c)) && Allowed(c,database,e.Query.Account)).OrderByDescending(e => e.Created).ToList()));
 api.MapGet("/executions/{id}", (string id, IStateRepository r) => r.Read(s => s.Executions.SingleOrDefault(e => e.Id == id) ?? throw new KeyNotFoundException()));
@@ -318,22 +327,7 @@ api.MapPost("/reports", (ReportRequest request, IStateRepository r, IStorageProv
     }
     return new { paths };
 });
-api.MapGet("/reports/{account}/{year:int}/{month:int}", (string account, int year, int month, IStorageProvider storage,IStateRepository r) =>
-{
-    var names = new[] { "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre" }; _ = new DateOnly(year, month, 1); Validation.Identifier(account);
-    var name=$"Resumen_{year:D4}_{month:D2}.xlsx";
-    var relative = Path.Combine(storage.AccountDirectory(account), year.ToString("D4"), $"{month:D2}-{names[month - 1]}", name); var path = storage.Resolve(relative);
-    var committed = r.Read(s => s.Executions.Where(e => e.Query.Account == account && e.Status is "Completed" or "CompletedWithWarnings")
-        .OrderByDescending(e => e.Finished).SelectMany(e => e.Reports).FirstOrDefault(report => report.Year == year && report.Month == month)?.Path);
-    if (committed is not null && File.Exists(storage.Resolve(committed))) path = storage.Resolve(committed);
-    if(!File.Exists(path)){
-        var annual = storage.Resolve(Path.Combine(year.ToString("D4"), $"Resumen_{year:D4}_{account}.xlsx"));
-        if (File.Exists(annual)) path = annual;
-        var candidates=r.Read(s=>s.Documents.Where(d=>d.Account==account&&d.Issued.Year==year&&d.Issued.Month==month).Select(d=>d.XmlPath??d.PdfPath).Where(p=>p is not null).Select(p=>Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(p!))!,name)).Distinct().ToList());
-        var previous=candidates.Select(storage.Resolve).FirstOrDefault(File.Exists);if(!File.Exists(path)&&previous is not null)path=previous;
-    }
-    if (!File.Exists(path)) throw new KeyNotFoundException("Genere primero el reporte."); return Results.File(path, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Path.GetFileName(path));
-});
+api.MapGet("/reports/{account}/{year:int}/{month:int}", MonthlyReportEndpoint.Download);
 api.MapGet("/schedules", (IStateRepository r, HttpContext c) => r.Read(s => s.Schedules.Where(x => DataScope.Visible(s, x.Query.Account, TestView(c)) && Allowed(c,database,x.Query.Account)).ToList()));
 api.MapPost("/schedules", (Schedule x, IStateRepository r,HttpContext c) => r.Update(s => { c.Items["AuditAccount"]=x.Query.Account;ValidateSchedule(x, s); x.Id = Guid.NewGuid().ToString("N");x.CreatedBy=(string)c.Items["PanelUser"]!; s.Schedules.Add(x); return x; }));
 api.MapPut("/schedules/{id}", (string id, Schedule x, IStateRepository r,HttpContext c) => r.Update(s => { c.Items["AuditAccount"]=x.Query.Account;ValidateSchedule(x, s); var index = s.Schedules.FindIndex(x => x.Id == id); if (index < 0) throw new KeyNotFoundException(); x.Id = id;x.CreatedBy=s.Schedules[index].CreatedBy; s.Schedules[index] = x; return x; }));

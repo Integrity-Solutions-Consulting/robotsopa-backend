@@ -7,6 +7,24 @@ using SriAutomation.LocalAgent;
 using SriAutomation.Domain;
 using SriAutomation.Infrastructure;
 
+if (args.Contains("--ejecutar-remoto"))
+{
+    await RemoteWorker.RunAsync();
+    return;
+}
+
+if (args.Contains("--verificar-remoto"))
+{
+    Environment.ExitCode = await RemoteAgentProbe.RunAsync();
+    return;
+}
+
+if (args.Contains("--diagnostico"))
+{
+    Environment.ExitCode = await LocalDiagnostic.RunAsync();
+    return;
+}
+
 if (args.Contains("--delivery"))
 {
     await DeliveryAgent.RunAsync(CancellationToken.None);

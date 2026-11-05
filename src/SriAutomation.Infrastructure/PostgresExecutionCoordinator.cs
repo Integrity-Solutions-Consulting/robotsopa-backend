@@ -46,6 +46,31 @@ public sealed class PostgresExecutionCoordinator(string connectionString)
     public bool Renew(ExecutionOwnership ownership, TimeSpan duration) => Change(ownership, duration, false);
     public bool Release(ExecutionOwnership ownership) => Change(ownership, TimeSpan.Zero, true);
 
+    public int FinalizeAbandonedRemoteAttempts(string username, int maximumAttempts)
+    {
+        using var db = new NpgsqlConnection(connectionString); db.Open(); using var tx = db.BeginTransaction();
+        using var select = new NpgsqlCommand("SELECT payload::text FROM app_state WHERE id=1 FOR UPDATE", db, tx);
+        var state = JsonSerializer.Deserialize<State>((string?)select.ExecuteScalar() ?? throw new InvalidOperationException("Missing state."), Options) ?? throw new InvalidOperationException("Invalid state.");
+        var count = 0;
+        foreach (var job in state.Executions.Where(e => e.Query.Mode == "Sri" && e.Status == "Running" && e.Attempts >= maximumAttempts && string.Equals(e.RequestedBy, username, StringComparison.OrdinalIgnoreCase)))
+        {
+            using var expired = new NpgsqlCommand("UPDATE execution_ownership SET coordination_state='released',updated_at=clock_timestamp() WHERE job_id=@job AND worker_id LIKE 'remote-%' AND (coordination_state='released' OR lease_expires_at<=clock_timestamp()) RETURNING job_id", db, tx);
+            expired.Parameters.AddWithValue("job", job.Id); if (expired.ExecuteScalar() is null) continue;
+            job.Status = job.Stage = job.CancelRequested ? "Cancelled" : "RequiresHumanAction";
+            job.Message = "La ejecución remota se interrumpió repetidamente; revise el historial antes de reintentar.";
+            job.Finished = DateTimeOffset.UtcNow;
+            ExecutionProgress.Set(state, job.Id, job.Stage, job.Message);
+            AuditTrail.Add(state, job.RequestedBy ?? "Agente", "Resultado de procesamiento", job.Query.Account, job.Status);
+            count++;
+        }
+        if (count > 0)
+        {
+            using var update = new NpgsqlCommand("UPDATE app_state SET payload=@payload::jsonb WHERE id=1", db, tx);
+            update.Parameters.AddWithValue("payload", NpgsqlDbType.Text, JsonSerializer.Serialize(state, Options)); update.ExecuteNonQuery();
+        }
+        tx.Commit(); return count;
+    }
+
     /// <summary>Finalizes cancellations only after the current lease can no longer write.</summary>
     public int FinalizeAbandonedCancellations()
     {

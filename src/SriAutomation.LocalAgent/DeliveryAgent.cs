@@ -14,6 +14,7 @@ internal static class DeliveryAgent
         var id = Environment.GetEnvironmentVariable("SRI_DELIVERY_AGENT_ID");
         var secret = Environment.GetEnvironmentVariable("SRI_DELIVERY_AGENT_SECRET");
         if (!Guid.TryParse(id, out _) || string.IsNullOrWhiteSpace(secret)) throw new InvalidOperationException("Configure las credenciales del agente de entrega.");
+        Environment.SetEnvironmentVariable("SRI_DELIVERY_AGENT_SECRET", null);
         var root = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "SRI-Automation");
         Directory.CreateDirectory(root);
         using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = uri, Timeout = TimeSpan.FromMinutes(2) };
@@ -23,19 +24,29 @@ internal static class DeliveryAgent
         {
             try
             {
-                var pending = await client.GetFromJsonAsync<PendingRemoteDelivery[]>("/delivery-agent/v1/pending", cancellation) ?? [];
-                foreach (var item in pending)
-                {
-                    try { await Deliver(client, root, item, cancellation); }
-                    catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or HttpRequestException)
-                    {
-                        try { using var failure = await client.PostAsJsonAsync($"/delivery-agent/v1/{item.Id}/failure", new { code = "DeliveryFailed" }, cancellation); }
-                        catch (HttpRequestException) { }
-                    }
-                }
+                await PollOnce(client, root, LockPath(), cancellation);
             }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or System.Text.Json.JsonException) { }
             await Task.Delay(TimeSpan.FromSeconds(10), cancellation);
+        }
+    }
+
+    internal static string LockPath() => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SRI-Automation", "delivery.lock");
+
+    internal static async Task PollOnce(HttpClient client, string root, string lockPath, CancellationToken cancellation)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+        // Serializa también con el agente de entrega instalado anteriormente.
+        using var gate = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        var pending = await client.GetFromJsonAsync<PendingRemoteDelivery[]>("/delivery-agent/v1/pending", cancellation) ?? [];
+        foreach (var item in pending)
+        {
+            try { await Deliver(client, root, item, cancellation); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or HttpRequestException)
+            {
+                try { using var failure = await client.PostAsJsonAsync($"/delivery-agent/v1/{item.Id}/failure", new { code = "DeliveryFailed" }, cancellation); }
+                catch (HttpRequestException) { }
+            }
         }
     }
 

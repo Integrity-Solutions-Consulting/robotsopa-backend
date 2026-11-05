@@ -37,7 +37,8 @@ public sealed class SriBackgroundService(JobProcessor processor, WorkerAuthentic
                     processor.MaintainPostgresQueue();
                     nextMaintenance = DateTimeOffset.UtcNow.AddSeconds(5);
                 }
-                var candidates = repository.Read(s => s.Executions.Where(e => !e.CancelRequested && e.Status is "Pending" or "Running").Select(e => e.Id).ToList());
+                var remoteSri = string.Equals(Environment.GetEnvironmentVariable("SRI_WORKER_REMOTE_SRI"), "true", StringComparison.OrdinalIgnoreCase);
+                var candidates = repository.Read(s => s.Executions.Where(e => !e.CancelRequested && (e.Status is "Pending" or "Running") && (!remoteSri || e.Query.Mode != "Sri")).Select(e => e.Id).ToList());
                 var processed = false;
                 foreach (var id in candidates)
                 {
