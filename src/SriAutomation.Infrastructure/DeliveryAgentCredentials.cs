@@ -44,6 +44,14 @@ public sealed class DeliveryAgentCredentials(string connectionString)
         return CryptographicOperations.FixedTimeEquals(SHA256.HashData(supplied), (byte[])reader[1]) ? reader.GetString(0) : null;
     }
 
+    public void RecordExecutionActivity(Guid id, string username)
+    {
+        using var db = new NpgsqlConnection(connectionString); db.Open();
+        using var cmd = new NpgsqlCommand("UPDATE delivery_agents SET last_seen_at=now() WHERE id=@id AND username=@username AND revoked_at IS NULL", db);
+        cmd.Parameters.AddWithValue("id", id); cmd.Parameters.AddWithValue("username", username);
+        cmd.ExecuteNonQuery();
+    }
+
     public bool Revoke(Guid id, string username)
     {
         using var db = new NpgsqlConnection(connectionString); db.Open();

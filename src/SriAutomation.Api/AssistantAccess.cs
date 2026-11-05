@@ -17,6 +17,7 @@ public static class AssistantAccess
         bool Has(string? account)=>account is not null && assigned.Contains(account);
         if (p.Length == 1 && p[0] == "delivery-agents" && method is "POST" or "GET") return true;
         if (p.Length == 2 && p[0] == "delivery-agents" && method == "DELETE") return true;
+        if (p.Length == 1 && p[0] == "delivery-queue" && method == "GET") return true;
         if (p.Length == 3 && p[0] == "delivery-queue" && method == "POST")
             return Has(repository.Read(s => s.Documents.FirstOrDefault(d => d.Id == p[1])?.Account));
         if(p.Length==2 && p[0]=="auth" && (p[1]=="session" || p[1]=="logout" || p[1]=="change-password")) return true;

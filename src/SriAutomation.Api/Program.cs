@@ -101,7 +101,15 @@ if (postgresConnection is not null)
 {
     var agentCredentials = new DeliveryAgentCredentials(postgresConnection);
     var remoteDeliveries = new RemoteDeliveryStore(postgresConnection);
-    api.MapGet("/delivery-agents", (HttpContext context) => Results.Ok(agentCredentials.List((string)context.Items["PanelUser"]!)));
+    api.MapGet("/delivery-agents", (HttpContext context) => {
+        context.Response.Headers.CacheControl = "no-store";
+        var enabled = string.Equals(Environment.GetEnvironmentVariable("SRI_REMOTE_EXECUTION_ENABLED"), "true", StringComparison.OrdinalIgnoreCase);
+        var cutoff = DateTime.UtcNow.AddSeconds(-30);
+        return Results.Ok(agentCredentials.List((string)context.Items["PanelUser"]!).Select(a => new {
+            a.Id, a.Label, a.CreatedAt, a.RevokedAt, a.LastSeenAt,
+            executionAvailable = enabled, online = enabled && a.RevokedAt is null && a.LastSeenAt > cutoff
+        }));
+    });
     api.MapPost("/delivery-agents", (AgentRegistration input, HttpContext context) =>
     {
         if (!context.Request.IsHttps) return Results.StatusCode(403);
@@ -111,6 +119,7 @@ if (postgresConnection is not null)
     });
     api.MapDelete("/delivery-agents/{id:guid}", (Guid id, HttpContext context) =>
         agentCredentials.Revoke(id, (string)context.Items["PanelUser"]!) ? Results.NoContent() : Results.NotFound());
+    api.MapGet("/delivery-queue", (HttpContext context) => { context.Response.Headers.CacheControl = "no-store"; return Results.Ok(remoteDeliveries.Recent((string)context.Items["PanelUser"]!)); });
     api.MapPost("/delivery-queue/{documentId}/{kind}", (string documentId, string kind, HttpContext context, IStateRepository state, IStorageProvider storage) =>
     {
         if (!context.Request.IsHttps || kind is not ("xml" or "pdf")) return Results.BadRequest();
@@ -133,7 +142,11 @@ if (postgresConnection is not null)
     {
         if (!context.Request.IsHttps || context.Request.Headers.ContainsKey("Origin")) return null;
         if (!Guid.TryParse(context.Request.Headers["X-Delivery-Agent-Id"].ToString(), out var id)) return null;
-        return agentCredentials.Authenticate(id, context.Request.Headers["X-Delivery-Agent-Secret"].ToString());
+        var user = agentCredentials.Authenticate(id, context.Request.Headers["X-Delivery-Agent-Secret"].ToString());
+        if (user is not null && context.Request.Method == "POST" &&
+            (context.Request.Path == "/execution-agent/v1/claim" || context.Request.Path.Value?.EndsWith("/renew", StringComparison.Ordinal) == true && context.Request.Path.StartsWithSegments("/execution-agent/v1")))
+            agentCredentials.RecordExecutionActivity(id, user);
+        return user;
     }
     var remoteExecutionEnabled = string.Equals(Environment.GetEnvironmentVariable("SRI_REMOTE_EXECUTION_ENABLED"), "true", StringComparison.OrdinalIgnoreCase);
     RemoteAgentStatus.Map(app, AgentUser, remoteExecutionEnabled);

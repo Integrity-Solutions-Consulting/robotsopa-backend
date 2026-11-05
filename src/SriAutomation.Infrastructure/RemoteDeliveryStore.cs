@@ -3,6 +3,7 @@ using Npgsql;
 namespace SriAutomation.Infrastructure;
 
 public sealed record PendingRemoteDelivery(Guid Id, string AccountId, string DocumentId, string Kind, string DestinationPath, string Sha256, int Attempts);
+public sealed record RemoteDeliveryStatus(string AccountId, string Kind, string Status, string? LastError, DateTime CreatedAt, DateTime? DeliveredAt);
 public sealed record RemoteDeliveryFile(string AccountId, string DocumentId, string Kind, string SourcePath, string Sha256);
 
 /// <summary>Access to deliveries is checked against current user assignments in PostgreSQL.</summary>
@@ -44,6 +45,16 @@ public sealed class RemoteDeliveryStore(string connectionString)
         cmd.Parameters.AddWithValue("username", username);
         using var reader = cmd.ExecuteReader(); var result = new List<PendingRemoteDelivery>();
         while (reader.Read()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetInt32(6)));
+        return result;
+    }
+
+    public IReadOnlyList<RemoteDeliveryStatus> Recent(string username)
+    {
+        using var db = new NpgsqlConnection(connectionString); db.Open();
+        using var cmd = new NpgsqlCommand($"SELECT d.account_id,d.kind,d.status,d.last_error,d.created_at,d.delivered_at FROM remote_deliveries d WHERE {Authorized} ORDER BY d.created_at DESC,d.id DESC LIMIT 100", db);
+        cmd.Parameters.AddWithValue("username", username);
+        using var reader = cmd.ExecuteReader(); var result = new List<RemoteDeliveryStatus>();
+        while (reader.Read()) result.Add(new(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetFieldValue<DateTime>(4), reader.IsDBNull(5) ? null : reader.GetFieldValue<DateTime>(5)));
         return result;
     }
 
