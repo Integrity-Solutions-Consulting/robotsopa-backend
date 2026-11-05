@@ -17,7 +17,7 @@ if (args.Contains("--health"))
     Environment.ExitCode = healthRepository.Read(s => s.WorkerHeartbeat > DateTimeOffset.UtcNow.AddSeconds(-30)) ? 0 : 1;
     return;
 }
-if (args.Contains("--probe")) { var probeDirectory = Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage"); Directory.CreateDirectory(probeDirectory); await PortalProbe.Run(Path.Combine(probeDirectory, "sri-public-controls.json")); return; }
+if (args.Contains("--probe")) { await PortalProbe.Run("docs/sri-public-controls.json"); return; }
 if (args.Contains("--revoke-session")) { var i = Array.IndexOf(args, "--revoke-session"); SriPortal.Vault().Revoke(args[i + 1]); return; }
 if (args.Contains("--logout"))
 {
@@ -48,14 +48,16 @@ builder.Services.AddSingleton(new WorkerSettings(statePath));
 var repository = CreateRepository();
 builder.Services.AddSingleton<IStateRepository>(repository);
 var provider = new DocumentStorage(Environment.GetEnvironmentVariable("SRI_OUTPUT_PATH")!,()=>repository.Read(s=>s.Settings.DownloadSubfolder));
-if (string.Equals(Environment.GetEnvironmentVariable("SRI_SHAREPOINT_ENABLED"), "true", StringComparison.OrdinalIgnoreCase))
-{
-    var graph = new SharePointGraphClient(new HttpClient { Timeout = TimeSpan.FromMinutes(4) }, SharePointOptions.FromEnvironment());
-    builder.Services.AddSingleton(new SharePointUploadProcessor(repository, provider, graph));
-    builder.Services.AddHostedService<SharePointBackgroundService>();
-}
-builder.Services.AddSingleton(new JobProcessor(repository, provider, new SriPortal(repository, new DownloadPipeline(repository, provider, new XmlDocumentParser()))));
+builder.Services.AddSingleton(WorkerProcessing.Create(repository, provider,
+    new SriPortal(repository, new DownloadPipeline(repository, provider, new XmlDocumentParser())),
+    (owned, content) =>
+    {
+        var owner = owned.Ownership;
+        var sessionDirectory = Path.Combine(Environment.GetEnvironmentVariable("SRI_SESSION_PATH") ?? Path.GetFullPath("storage/sessions"),
+            "executions", Validation.Identifier(owner.JobId), $"{owner.LeaseId:N}-{owner.FencingToken}");
+        var sessionKey = Environment.GetEnvironmentVariable("SRI_SESSION_KEY_FILE") ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SRI-Automation", "secrets", "session.key");
+        return new SriPortal(owned, new DownloadPipeline(owned, provider, new XmlDocumentParser(), content), new SessionVault(sessionDirectory, sessionKey));
+    }, allowOwnedSri: true));
 builder.Services.AddSingleton(new WorkerAuthentication(repository));
-builder.Services.AddHostedService<WorkerHeartbeatService>();
 builder.Services.AddHostedService<SriBackgroundService>();
 await builder.Build().RunAsync();

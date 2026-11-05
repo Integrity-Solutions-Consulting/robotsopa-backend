@@ -12,7 +12,7 @@ public static class DashboardData
         return new
         {
             documents = documents.Count,
-            downloaded = documents.Sum(d => (Exists(d.XmlPath) || state.SharePointUploads.Any(u => u.DocumentId == d.Id && u.Extension == "xml" && u.Status == "Completed") ? 1 : 0) + (Exists(d.PdfPath) || state.SharePointUploads.Any(u => u.DocumentId == d.Id && u.Extension == "pdf" && u.Status == "Completed") ? 1 : 0)),
+            downloaded = documents.Sum(d => (Exists(d.XmlPath) ? 1 : 0) + (Exists(d.PdfPath) ? 1 : 0)),
             completed = executions.Count(e => e.Status is "Completed" or "CompletedWithWarnings"),
             failed = executions.Count(e => e.Status == "Failed"),
             last = executions.OrderByDescending(e => e.Created).FirstOrDefault(),

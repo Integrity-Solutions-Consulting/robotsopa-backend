@@ -136,7 +136,7 @@ public sealed class AuthenticationOperation
     public List<BrowserObservation> Observations { get; set; } = [];
     public string? VerificationCode { get; set; }
     public string? ExecutionId { get; set; }
-    public string Owner { get; set; } = "Worker";
+    public string Owner { get; set; } = "Agent";
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
     public string Account { get; set; } = "";
     public string Status { get; set; } = "Ready";
@@ -148,7 +148,7 @@ public sealed class AuthenticationOperation
     public DateTimeOffset Updated { get; set; } = DateTimeOffset.UtcNow;
     public DateTimeOffset? Expires { get; set; }
     public DateTimeOffset? VerifiedAt { get; set; }
-    public string Message { get; set; } = "Solicitud pendiente del Worker.";
+    public string Message { get; set; } = "Solicitud pendiente del agente local.";
 }
 public sealed record PortalControl(string Tag, string? Id, string? Type);
 public sealed record BrowserObservation(DateTimeOffset At,string Phase,string Location,int Tabs,int Frames,bool Closed);

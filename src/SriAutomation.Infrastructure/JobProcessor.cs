@@ -3,8 +3,68 @@ using SriAutomation.Domain;
 
 namespace SriAutomation.Infrastructure;
 
-public sealed class JobProcessor(IStateRepository repository, IStorageProvider storage, ISriComprobanteService sri)
+public class JobProcessor(IStateRepository repository, IStorageProvider storage, ISriComprobanteService sri,
+    Func<OwnedStateRepository, OwnedContentStore, ISriComprobanteService>? ownedSri = null, bool allowOwnedSri = false)
 {
+    public void MaintainPostgresQueue()
+    {
+        if (repository is not PostgresStateRepository) throw new InvalidOperationException("PostgreSQL repository required.");
+        repository.Update(s =>
+        {
+            var now = DateTimeOffset.UtcNow;
+            s.WorkerHeartbeat = now;
+            foreach (var schedule in s.Schedules.Where(x => x.Enabled && x.Next <= now))
+            {
+                if (s.Executions.Any(e => e.Query.Account == schedule.Query.Account && e.Status is "Pending" or "Running")) continue;
+                var job = Validation.Enqueue(s, schedule.Query);
+                job.RequestedBy = schedule.CreatedBy;
+                AuditTrail.Add(s, schedule.CreatedBy ?? "Sistema (programación)", "Inicio de ejecución programada", schedule.Query.Account, "Encolada automáticamente por el sistema");
+                do { schedule.Next = Validation.Next(schedule.Next, schedule.Frequency, schedule.IntervalDays); }
+                while (schedule.Next <= now);
+                if (schedule.Frequency == "Once") schedule.Enabled = false;
+            }
+            foreach (var job in s.Executions.Where(e => e.Status == "Pending" && e.CancelRequested))
+            {
+                job.Status = job.Stage = "Cancelled";
+                job.Finished = now;
+            }
+            return true;
+        });
+    }
+    public virtual async Task ProcessOwned(ExecutionOwnership ownership, CancellationToken cancellation)
+    {
+        if (repository is not PostgresStateRepository postgres) throw new InvalidOperationException("PostgreSQL ownership requires the PostgreSQL repository.");
+        var requestedMode = postgres.Read(s => s.Executions.Single(e => e.Id == ownership.JobId).Query.Mode);
+        if (ownedSri is not null && (requestedMode != "Sri" || allowOwnedSri))
+        {
+            var scopedRepository = new OwnedStateRepository(postgres, ownership);
+            var scopedContent = new OwnedContentStore(storage, scopedRepository, ownership);
+            var scopedStorage = new OwnedReportStorage(storage, scopedContent, ownership);
+            var scopedProcessor = new JobProcessor(scopedRepository, scopedStorage, ownedSri(scopedRepository, scopedContent));
+            var execution = scopedRepository.Read(s => s.Executions.Single(e => e.Id == ownership.JobId));
+            if (execution.CancelRequested)
+            {
+                scopedRepository.Update(s => { var e = s.Executions.Single(x => x.Id == ownership.JobId); e.Status = e.Stage = "Cancelled"; e.Finished = DateTimeOffset.UtcNow; return true; });
+                return;
+            }
+            await scopedProcessor.ProcessExecution(execution, cancellation);
+            return;
+        }
+        cancellation.ThrowIfCancellationRequested();
+        postgres.UpdateOwned(ownership, s =>
+        {
+            var job = s.Executions.Single(e => e.Id == ownership.JobId);
+            cancellation.ThrowIfCancellationRequested();
+            job.Status = job.CancelRequested ? "Cancelled" : "RequiresHumanAction";
+            job.Stage = job.Status;
+            job.Message = job.CancelRequested ? "Cancelada por el usuario." : "Procesamiento detenido: los flujos SRI y de documentos aún no están protegidos con fencing.";
+            job.Finished = job.CancelRequested ? DateTimeOffset.UtcNow : null;
+            ExecutionProgress.Set(s, job.Id, job.Stage, job.Message);
+            AuditTrail.Add(s, job.RequestedBy ?? "Sistema (Worker)", "Procesamiento detenido", job.Query.Account, job.Message);
+            return true;
+        });
+    }
+
     public void Recover()
     {
         repository.Update(s =>
@@ -21,13 +81,14 @@ public sealed class JobProcessor(IStateRepository repository, IStorageProvider s
     }
     public async Task<bool> Tick(CancellationToken cancellation)
     {
+        if (repository is PostgresStateRepository) throw new InvalidOperationException("PostgreSQL processing requires execution ownership.");
         var execution = repository.Update(s =>
         {
             s.WorkerHeartbeat = DateTimeOffset.UtcNow;
             foreach (var schedule in s.Schedules.Where(x => x.Enabled && x.Next <= DateTimeOffset.UtcNow))
             {
                 if (s.Executions.Any(e => e.Query.Account == schedule.Query.Account && e.Status is "Pending" or "Running")) continue;
-                var scheduled=Validation.Enqueue(s, schedule.Query.StorageMode == "LOCAL_WINDOWS" ? schedule.Query with { StorageMode = "LEGACY" } : schedule.Query);scheduled.RequestedBy=schedule.CreatedBy;
+                var scheduled=Validation.Enqueue(s, schedule.Query);scheduled.RequestedBy=schedule.CreatedBy;
                 AuditTrail.Add(s,schedule.CreatedBy??"Sistema (programación)","Inicio de ejecución programada",schedule.Query.Account,"Encolada automáticamente por el sistema");
                 do { schedule.Next = Validation.Next(schedule.Next, schedule.Frequency,schedule.IntervalDays); }
                 while (schedule.Next <= DateTimeOffset.UtcNow);
@@ -39,6 +100,12 @@ public sealed class JobProcessor(IStateRepository repository, IStorageProvider s
             return job;
         });
         if (execution is null) return false;
+        await ProcessExecution(execution, cancellation);
+        return true;
+    }
+
+    private async Task ProcessExecution(Execution execution, CancellationToken cancellation)
+    {
         using var cancelled = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         var watch = Task.Run(async () =>
         {
@@ -73,7 +140,6 @@ public sealed class JobProcessor(IStateRepository repository, IStorageProvider s
                 if (execution.Query.Mode == "Stored") { job.Found = documents.Count; job.Processed = documents.Count; }
                 job.Errors = Math.Max(job.Errors, documents.Count(d => d.Status != "ValidadoXML"));
                 job.Status = job.CancelRequested ? "Cancelled" : job.Errors > 0 ? "CompletedWithWarnings" : "Completed";
-                if (!job.CancelRequested && job.Query.StorageMode == "LOCAL_WINDOWS" && s.LocalDeliveries.Any(x => x.ExecutionId == job.Id && x.Status != "Completed")) { job.Status = job.Stage = "WaitingForDelivery"; job.Finished = null; job.Message = "Entrega historica pendiente de revision; no se ha confirmado la entrega."; ExecutionProgress.Set(s,job.Id,job.Stage,job.Message); return true; }
                 job.Finished = DateTimeOffset.UtcNow; job.Message = execution.Query.Mode == "Sri" ? "Consultas finalizadas y reportes actualizados desde los archivos almacenados." : "Reportes generados desde documentos almacenados; sin consulta SRI.";
                 job.Stage = job.Status;
                 ExecutionProgress.Set(s,job.Id,job.Status,job.Message);
@@ -82,7 +148,7 @@ public sealed class JobProcessor(IStateRepository repository, IStorageProvider s
             });
         }
         catch (HumanActionRequiredException ex) { PartialReports(); Finish("RequiresHumanAction", ex.Message); }
-        catch (OperationCanceledException) when (!cancellation.IsCancellationRequested) { PartialReports(); Finish("Cancelled", "Cancelada por el usuario."); }
+        catch (OperationCanceledException) when (repository.Read(s => s.Executions.Single(e => e.Id == execution.Id).CancelRequested)) { Finish("Cancelled", "Cancelada por el usuario."); }
         catch (OperationCanceledException) { /* Permanece Running para recuperación al reiniciar. */ }
         catch (IOException ex) when (execution.Attempts < 3)
         {
@@ -91,7 +157,6 @@ public sealed class JobProcessor(IStateRepository repository, IStorageProvider s
         }
         catch (Exception ex) { Console.Error.WriteLine("Error de procesamiento: " + ex.GetType().Name); Finish("Failed", ex is SriUnavailableException ? "El SRI no respondió después de los intentos permitidos. Puede reintentar desde Historial." : ex is InvalidDataException ? "El SRI no confirmó todos los resultados o un archivo no superó la validación. No se declaró éxito." : "Error al procesar. Revise permisos, integridad y configuración del Worker."); }
         finally { cancelled.Cancel(); await watch; }
-        return true;
         void Finish(string status, string message) => repository.Update(s => { var job = s.Executions.Single(e => e.Id == execution.Id); job.Status = status;ExecutionProgress.Set(s,job.Id,status,message);job.Finished = DateTimeOffset.UtcNow;AuditTrail.Add(s,job.RequestedBy??"Sistema (Worker)","Resultado de procesamiento",job.Query.Account,status); return true; });
         void PartialReports()
         {

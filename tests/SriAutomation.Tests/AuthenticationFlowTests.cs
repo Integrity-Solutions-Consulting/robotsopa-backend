@@ -3,10 +3,11 @@ using SriAutomation.Domain;
 namespace SriAutomation.Tests;
 public sealed class AuthenticationFlowTests
 {
- [Fact] public void WorkerAuthenticationIsActiveOnlyWhileProcessing() {
+ [Fact] public void PendingHumanActionRemainsActiveUntilClosed() {
   var op = new AuthenticationOperation { Owner="Worker", Status="OpeningBrowser" };
-  Assert.True(AuthenticationFlow.Active(op)); op.Status="RequiresHumanAction"; Assert.False(AuthenticationFlow.Active(op));
-  op.Owner="Agent"; op.Status="OpeningBrowser"; Assert.False(AuthenticationFlow.Active(op));
+  Assert.True(AuthenticationFlow.Active(op)); op.Status="RequiresHumanAction"; Assert.True(AuthenticationFlow.Active(op));
+  op.Owner="Agent"; op.Status="OpeningBrowser"; Assert.True(AuthenticationFlow.Active(op));
+  op.Status="Cancelled"; Assert.False(AuthenticationFlow.Active(op));
  }
  [Fact] public void QueueDoesNotDependOnAgentHeartbeat() {
   var s = new State { Accounts=[new("a","Cuenta","1790000000001")] };

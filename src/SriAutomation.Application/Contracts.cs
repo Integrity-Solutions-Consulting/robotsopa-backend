@@ -44,9 +44,7 @@ public static class Validation
         if(query.Types.Distinct().Count()!=query.Types.Length)throw new ArgumentException("No repita tipos de comprobante.");
         if(query.To > query.From.AddYears(1).AddDays(-1))throw new ArgumentException("Cada operación admite hasta un año; seleccione un rango menor.");
         if (query.Mode is not "Sri" and not "Stored") throw new ArgumentException("Modo inválido.");
-        if (query.StorageMode is not ("LEGACY" or "LOCAL_WINDOWS" or "SHAREPOINT")) throw new ArgumentException("Destino inválido.");
-        if (query.StorageMode == "SHAREPOINT" && !string.Equals(Environment.GetEnvironmentVariable("SRI_SHAREPOINT_ENABLED"), "true", StringComparison.OrdinalIgnoreCase)) throw new ArgumentException("SharePoint no está habilitado.");
-        if (query.StorageMode == "LOCAL_WINDOWS") throw new ArgumentException("El destino Windows ya no esta disponible; seleccione almacenamiento del servidor.");
+        if (query.StorageMode == "LOCAL_WINDOWS") throw new ArgumentException("El destino Windows local ya no está disponible para nuevas ejecuciones.");
         if (!query.Pdf && !query.Xml) throw new ArgumentException("Seleccione PDF o XML.");
         foreach (var code in new[] { query.Establishment, query.EmissionPoint })
             if (!string.IsNullOrEmpty(code) && (code.Length != 3 || !code.All(char.IsAsciiDigit))) throw new ArgumentException("Establecimiento y punto deben tener tres dígitos.");
@@ -54,9 +52,9 @@ public static class Validation
     public static Execution Enqueue(State state, Query query)
     {
         Query(query, state);
-        var blocking = state.Executions.FirstOrDefault(e => e.Query.Account == query.Account && (e.Status is "Pending" or "Running"));
+        var blocking = state.Executions.FirstOrDefault(e => e.Query.Account == query.Account && e.Status is "Pending" or "Running");
         if (blocking is not null)
-            throw new ArgumentException($"La cuenta ya tiene una ejecución pendiente o activa (ID: {blocking.Id}, estado: {blocking.Status}). Revise el historial antes de continuar.");
+            throw new ArgumentException($"La cuenta ya tiene una ejecución pendiente o activa: {blocking.Id} ({blocking.Status}).");
         var execution = new Execution { Query = query.Mode == "Sri" ? query with { Pdf = true, Xml = false } : query };
         state.Executions.Add(execution);
         return execution;

@@ -15,6 +15,10 @@ public static class AssistantAccess
         var p=parts.Skip(2).ToArray(); var method=c.Request.Method; var user=(string)c.Items["PanelUser"]!;
         var assigned=db.AssignedAccounts(user);
         bool Has(string? account)=>account is not null && assigned.Contains(account);
+        if (p.Length == 1 && p[0] == "delivery-agents" && method is "POST" or "GET") return true;
+        if (p.Length == 2 && p[0] == "delivery-agents" && method == "DELETE") return true;
+        if (p.Length == 3 && p[0] == "delivery-queue" && method == "POST")
+            return Has(repository.Read(s => s.Documents.FirstOrDefault(d => d.Id == p[1])?.Account));
         if(p.Length==2 && p[0]=="auth" && (p[1]=="session" || p[1]=="logout" || p[1]=="change-password")) return true;
         if(p.Length==1 && method=="GET" && new[]{"accounts","audit","settings","system","dashboard","executions","documents","schedules","configurations"}.Contains(p[0])) return true;
         if(p.Length==2 && method=="GET" && (p[0]=="worker" && p[1]=="status" || p[0]=="portal" && p[1]=="capabilities")) return true;

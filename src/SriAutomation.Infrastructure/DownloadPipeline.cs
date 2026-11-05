@@ -4,11 +4,10 @@ using SriAutomation.Domain;
 
 namespace SriAutomation.Infrastructure;
 
-public sealed class DownloadPipeline(IStateRepository repository, IStorageProvider storage, IDocumentParser parser) : IDownloadPipeline
+public sealed class DownloadPipeline(IStateRepository repository, IStorageProvider storage, IDocumentParser parser, OwnedContentStore? ownedContent = null) : IDownloadPipeline
 {
     public bool IsAvailable(Voucher document, string extension)
     {
-        if (repository.Read(s => s.SharePointUploads.Any(u => u.DocumentId == document.Id && u.Extension == extension && u.Status == "Completed"))) return true;
         var relative = extension == "xml" ? document.XmlPath : document.PdfPath;
         var expected = extension == "xml" ? document.XmlSha256 : document.PdfSha256;
         if (relative is null || expected is null) return false;
@@ -17,6 +16,8 @@ public sealed class DownloadPipeline(IStateRepository repository, IStorageProvid
     }
     public Voucher Process(DownloadedVoucher download)
     {
+        if (repository is OwnedStateRepository && ownedContent is null) throw new InvalidOperationException("La ejecución distribuida requiere publicación protegida.");
+        if (ownedContent is not null && !ownedContent.Uses(repository)) throw new InvalidOperationException("La publicación requiere el repositorio propietario asociado.");
         var account = repository.Read(s => s.Accounts.SingleOrDefault(a => a.Id == download.Account)) ?? throw new ArgumentException("Cuenta no registrada.");
         if (download.Xml is null && download.Pdf is null) throw new ArgumentException("No hay archivos disponibles para este comprobante.");
         var document = download.Xml is not null ? parser.ParseXml(download.Account, download.Xml)
@@ -31,20 +32,23 @@ public sealed class DownloadPipeline(IStateRepository repository, IStorageProvid
             if (new PdfInspector().Check(download.Pdf, document.AccessKey) is { } warning) { document.Status = "Revisar"; document.Warning = string.Join(" ", document.Warning, warning); }
         }
         document.Source = "Sri";
-        if (download.Xml is not null) { document.XmlPath = storage.Save(document, "xml", download.Xml); document.XmlSha256 = Hash(download.Xml); }
-        if (download.Pdf is not null) { document.PdfPath = storage.Save(document, "pdf", download.Pdf); document.PdfSha256 = Hash(download.Pdf); }
+        if (download.Xml is not null) { document.XmlPath = Save("xml", download.Xml); document.XmlSha256 = Hash(download.Xml); }
+        if (download.Pdf is not null) { document.PdfPath = Save("pdf", download.Pdf); document.PdfSha256 = Hash(download.Pdf); }
         return repository.Update(s =>
         {
             var existing = s.Documents.SingleOrDefault(d => d.Account == document.Account && d.Type == document.Type && d.AccessKey == document.AccessKey);
-            if (existing is null) { s.Documents.Add(document); QueueUploads(s, document, account, download); return document; }
+            if (existing is null) { s.Documents.Add(document); return document; }
             if (existing.XmlSha256 is not null && document.XmlSha256 is not null && existing.XmlSha256 != document.XmlSha256 || existing.PdfSha256 is not null && document.PdfSha256 is not null && existing.PdfSha256 != document.PdfSha256) throw new ArgumentException("Colisión de integridad en el manifiesto.");
             document.Id = existing.Id;
             document.XmlPath ??= existing.XmlPath; document.XmlSha256 ??= existing.XmlSha256;
             document.PdfPath ??= existing.PdfPath; document.PdfSha256 ??= existing.PdfSha256;
             if (download.Xml is null && existing.XmlPath is not null)
-            { existing.PdfPath = document.PdfPath; existing.PdfSha256 = document.PdfSha256; existing.Status = "Revisar"; existing.Warning = "PDF incorporado a XML existente; revisar conciliación."; QueueUploads(s, existing, account, download); return existing; }
-            s.Documents[s.Documents.IndexOf(existing)] = document; QueueUploads(s, document, account, download); return document;
+            { existing.PdfPath = document.PdfPath; existing.PdfSha256 = document.PdfSha256; existing.Status = "Revisar"; existing.Warning = "PDF incorporado a XML existente; revisar conciliación."; return existing; }
+            s.Documents[s.Documents.IndexOf(existing)] = document; return document;
         });
+        string Save(string extension, byte[] bytes) => ownedContent is null
+            ? storage.Save(document, extension, bytes)
+            : ownedContent.Publish(bytes, extension, (_, path, _) => path);
     }
     private static void QueueUploads(State state, Voucher document, Account account, DownloadedVoucher download)
     {

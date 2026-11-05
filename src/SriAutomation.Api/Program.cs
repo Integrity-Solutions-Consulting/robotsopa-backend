@@ -2,6 +2,8 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.RateLimiting;
+using System.Net;
+using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.RateLimiting;
 using SriAutomation.Application;
 using SriAutomation.Domain;
@@ -9,6 +11,18 @@ using SriAutomation.Infrastructure;
 using SriAutomation.Api;
 
 var builder = WebApplication.CreateBuilder(args.Where(arg => arg is not "--db-migrate" and not "--db-init").ToArray());
+var trustedProxies = (Environment.GetEnvironmentVariable("SRI_TRUSTED_PROXY_IPS") ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+if (trustedProxies.Length > 0)
+{
+    builder.Services.Configure<ForwardedHeadersOptions>(options =>
+    {
+        options.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedFor;
+        options.KnownProxies.Clear();
+        options.KnownIPNetworks.Clear();
+        foreach (var proxy in trustedProxies) options.KnownProxies.Add(IPAddress.Parse(proxy));
+        options.ForwardLimit = 1;
+    });
+}
 var postgresConnection = builder.Configuration.GetConnectionString("DefaultConnection");
 if (string.IsNullOrWhiteSpace(postgresConnection)) postgresConnection = null;
 if (string.IsNullOrWhiteSpace(postgresConnection) && !builder.Environment.IsDevelopment()) throw new InvalidOperationException("Configure ConnectionStrings__DefaultConnection.");
@@ -18,15 +32,13 @@ var secureCookie = string.Equals(Environment.GetEnvironmentVariable("SRI_COOKIE_
 var password = Environment.GetEnvironmentVariable("SRI_ADMIN_PASSWORD") ?? throw new InvalidOperationException("Configure SRI_ADMIN_PASSWORD.");
 if (password.Length < 16) throw new InvalidOperationException("SRI_ADMIN_PASSWORD requiere al menos 16 caracteres.");
 var output = Environment.GetEnvironmentVariable("SRI_OUTPUT_PATH") ?? Path.GetFullPath("downloads");
-_ = Environment.GetEnvironmentVariable("SRI_ADMIN_USERNAME") ?? throw new InvalidOperationException("Configure SRI_ADMIN_USERNAME con la identidad local del administrador.");
+var adminUsername = Environment.GetEnvironmentVariable("SRI_ADMIN_USERNAME") ?? throw new InvalidOperationException("Configure SRI_ADMIN_USERNAME con la identidad del administrador.");
 var credentialKeyFile = Environment.GetEnvironmentVariable("SRI_CREDENTIAL_KEY_FILE");
 if (Environment.GetEnvironmentVariable("SRI_CREDENTIAL_KEY_BASE64") is not null || credentialKeyFile is not null)
     EncryptionKey.Validate("SRI_CREDENTIAL_KEY_BASE64", credentialKeyFile ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SRI-Automation", "secrets", "credential.key"));
 builder.Services.AddSingleton<IStateRepository>(_ => postgresConnection is null ? new JsonStateRepository(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage")) : new PostgresStateRepository(postgresConnection));
 builder.Services.AddSingleton<IPanelDatabase>(_ => postgresConnection is null ? new PanelDatabase(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage")) : new PostgresPanelDatabase(postgresConnection));
 builder.Services.AddSingleton<IStorageProvider>(services=>new DocumentStorage(output,()=>services.GetRequiredService<IStateRepository>().Read(s=>s.Settings.DownloadSubfolder)));
-if (string.Equals(Environment.GetEnvironmentVariable("SRI_SHAREPOINT_ENABLED"), "true", StringComparison.OrdinalIgnoreCase))
-    builder.Services.AddSingleton(new SharePointGraphClient(new HttpClient { Timeout = TimeSpan.FromMinutes(4) }, SharePointOptions.FromEnvironment()));
 builder.Services.AddSingleton<IDocumentParser, XmlDocumentParser>();
 builder.Services.AddEndpointsApiExplorer(); builder.Services.AddSwaggerGen(); builder.Services.AddHealthChecks().AddCheck<SriAutomation.Api.StorageHealthCheck>("storage");
 builder.Services.AddRateLimiter(o => o.AddFixedWindowLimiter("login", x => { x.PermitLimit = 10; x.Window = TimeSpan.FromMinutes(1); x.QueueLimit = 0; }));
@@ -34,9 +46,10 @@ builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20_000_000);
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 var app = builder.Build();
+if (trustedProxies.Length > 0) app.UseForwardedHeaders();
 app.UseCors();
 var database = app.Services.GetRequiredService<IPanelDatabase>();
-if (postgresConnection is null) { database.Initialize("Cristopher", password); database.SyncAudit(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Audit.ToList())); database.SyncAccounts(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Accounts.ToList())); }
+if (postgresConnection is null) { database.Initialize(adminUsername, password); database.SyncAudit(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Audit.ToList())); database.SyncAccounts(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Accounts.ToList())); }
 else PostgresAdministration.Verify(postgresConnection);
 var sessions = new ConcurrentDictionary<string, (DateTimeOffset Expiry, string User, string Role, bool MustChange)>();
 app.Use(async (context, next) =>
@@ -75,6 +88,79 @@ if(s.AuthenticationMode!="EncryptedProfilesV4") {
  s.AuthenticationMode="EncryptedProfilesV4";
 } return true; });
 var api = app.MapGroup("/api/v1");
+if (postgresConnection is not null)
+{
+    var agentCredentials = new DeliveryAgentCredentials(postgresConnection);
+    var remoteDeliveries = new RemoteDeliveryStore(postgresConnection);
+    api.MapGet("/delivery-agents", (HttpContext context) => Results.Ok(agentCredentials.List((string)context.Items["PanelUser"]!)));
+    api.MapPost("/delivery-agents", (AgentRegistration input, HttpContext context) =>
+    {
+        if (!context.Request.IsHttps) return Results.StatusCode(403);
+        var created = agentCredentials.Register((string)context.Items["PanelUser"]!, input.Label);
+        context.Response.Headers.CacheControl = "no-store";
+        return Results.Ok(new { id = created.Id, secret = created.Secret });
+    });
+    api.MapDelete("/delivery-agents/{id:guid}", (Guid id, HttpContext context) =>
+        agentCredentials.Revoke(id, (string)context.Items["PanelUser"]!) ? Results.NoContent() : Results.NotFound());
+    api.MapPost("/delivery-queue/{documentId}/{kind}", (string documentId, string kind, HttpContext context, IStateRepository state, IStorageProvider storage) =>
+    {
+        if (!context.Request.IsHttps || kind is not ("xml" or "pdf")) return Results.BadRequest();
+        var document = state.Read(s => s.Documents.SingleOrDefault(d => d.Id == documentId));
+        if (document is null || !Allowed(context, database, document.Account)) return Results.NotFound();
+        var account = state.Read(s => s.Accounts.SingleOrDefault(a => a.Id == document.Account));
+        var taxId = account?.TaxId;
+        if (taxId is null || taxId.Length != 13 || !taxId.All(char.IsAsciiDigit)) return Results.BadRequest();
+        var source = kind == "xml" ? document.XmlPath : document.PdfPath;
+        var hash = kind == "xml" ? document.XmlSha256 : document.PdfSha256;
+        if (source is null || hash is null || !Validation.Types.Contains(document.Type)) return Results.NotFound();
+        var file = storage.Resolve(source);
+        if (!File.Exists(file) || DownloadPipeline.Hash(File.ReadAllBytes(file)) != hash) return Results.Conflict();
+        var destination = string.Join('/', taxId, document.Issued.Year.ToString("D4"), document.Issued.Month.ToString("D2"), document.Type, Validation.Identifier(document.AccessKey) + "." + kind);
+        remoteDeliveries.Enqueue((string)context.Items["PanelUser"]!, document.Account, document.Id, kind, source, destination, hash);
+        return Results.Ok(new { queued = true });
+    });
+
+    string? AgentUser(HttpContext context)
+    {
+        if (!context.Request.IsHttps || context.Request.Headers.ContainsKey("Origin")) return null;
+        if (!Guid.TryParse(context.Request.Headers["X-Delivery-Agent-Id"].ToString(), out var id)) return null;
+        return agentCredentials.Authenticate(id, context.Request.Headers["X-Delivery-Agent-Secret"].ToString());
+    }
+    app.MapGet("/delivery-agent/v1/pending", (HttpContext context) =>
+    {
+        var username = AgentUser(context);
+        return username is null ? Results.Unauthorized() : Results.Ok(remoteDeliveries.Pending(username));
+    });
+    app.MapGet("/delivery-agent/v1/{id:guid}/file", (Guid id, HttpContext context, IStateRepository state, IStorageProvider storage) =>
+    {
+        var username = AgentUser(context);
+        if (username is null) return Results.Unauthorized();
+        var item = remoteDeliveries.GetFile(username, id);
+        if (item is null || item.Kind is not ("xml" or "pdf" or "xlsx")) return Results.NotFound();
+        var document = item.Kind == "xlsx" ? null : state.Read(s => s.Documents.SingleOrDefault(d => d.Id == item.DocumentId && d.Account == item.AccountId));
+        var path = item.Kind == "xlsx" ? item.SourcePath : item.Kind == "xml" ? document?.XmlPath : document?.PdfPath;
+        var hash = item.Kind == "xlsx" ? item.Sha256 : item.Kind == "xml" ? document?.XmlSha256 : document?.PdfSha256;
+        if (path is null || path != item.SourcePath || hash != item.Sha256) return Results.NotFound();
+        var resolved = storage.Resolve(path);
+        if (!File.Exists(resolved)) return Results.NotFound();
+        var bytes = File.ReadAllBytes(resolved);
+        if (!string.Equals(DownloadPipeline.Hash(bytes), item.Sha256, StringComparison.Ordinal)) return Results.Conflict();
+        context.Response.Headers.CacheControl = "no-store";
+        return Results.File(bytes, "application/octet-stream", Path.GetFileName(resolved));
+    });
+    app.MapPost("/delivery-agent/v1/{id:guid}/confirm", (Guid id, DeliveryConfirmation input, HttpContext context) =>
+    {
+        var username = AgentUser(context);
+        if (username is null) return Results.Unauthorized();
+        return remoteDeliveries.Confirm(username, id, input.Sha256) ? Results.NoContent() : Results.NotFound();
+    });
+    app.MapPost("/delivery-agent/v1/{id:guid}/failure", (Guid id, DeliveryFailure input, HttpContext context) =>
+    {
+        var username = AgentUser(context);
+        if (username is null) return Results.Unauthorized();
+        return remoteDeliveries.RecordFailure(username, id, input.Code) ? Results.NoContent() : Results.NotFound();
+    });
+}
 api.MapPost("/auth/login", (Login login, HttpContext c) =>
 {
     if (string.IsNullOrWhiteSpace(login.Username) || login.Password is null || login.Username.Length > 80 || login.Password.Length > 1024) return Results.Unauthorized();
@@ -119,15 +205,14 @@ api.MapPost("/executions/{id}/resume", (string id, IStateRepository r) => r.Upda
     var e = s.Executions.SingleOrDefault(e => e.Id == id) ?? throw new KeyNotFoundException();
     if (e.Status != "RequiresHumanAction") throw new ArgumentException("No está suspendida.");
     if (s.Executions.Any(x => x.Id != id && x.Query.Account == e.Query.Account && x.Status is "Pending" or "Running")) throw new ArgumentException("La cuenta ya tiene un trabajo activo.");
-    if (e.Query.Mode == "Sri") e.Query = e.Query with { Pdf = true, Xml = false };
     e.Status = "Pending"; e.Stage = "Ready"; e.CancelRequested = false; e.Finished = null; e.Attempts = 0;
     e.Message = "Reanudación solicitada desde el último checkpoint confirmado."; return e;
 }));
-api.MapPost("/executions/{id}/retry", (string id, IStateRepository r) => r.Update(s =>
+api.MapPost("/executions/{id}/retry", (string id, IStateRepository r, HttpContext c) => r.Update(s =>
 {
     var old = s.Executions.SingleOrDefault(e => e.Id == id) ?? throw new KeyNotFoundException();
     if (old.Status is not "Failed" and not "Cancelled" and not "CompletedWithWarnings") throw new ArgumentException("El trabajo no admite reintento.");
-    var next = Validation.Enqueue(s, old.Query); next.ParentExecutionId = old.Id; return next;
+    var next = Validation.Enqueue(s, old.Query); next.ParentExecutionId = old.Id; next.RequestedBy = (string)c.Items["PanelUser"]!; return next;
 }));
 app.MapAccountEndpoints(api);
 app.MapPanelEndpoints(api, database);
@@ -192,17 +277,51 @@ api.MapPost("/reports", (ReportRequest request, IStateRepository r, IStorageProv
     var from = new DateOnly(request.Year, request.Month, 1); var to = request.To ?? from; if (to < from || to.Year - from.Year > 20) throw new ArgumentException("Rango inválido.");
     if (!r.Read(s => s.Accounts.Any(a => a.Id == request.Account))) throw new ArgumentException("Cuenta inexistente.");
     var documents = r.Read(s => s.Documents.Where(d => d.Account == request.Account).ToList()); var paths = new List<string>();
-    foreach (var year in documents.Where(d => d.Issued >= from && d.Issued <= to.AddMonths(1).AddDays(-1)).Select(d => d.Issued.Year).Distinct().Order()) paths.Add(storage.Report(request.Account, year, 1, documents));
+    foreach (var period in documents.Where(d => d.Issued >= from && d.Issued <= to.AddMonths(1).AddDays(-1)).Select(d => (d.Issued.Year, d.Issued.Month)).Distinct().OrderBy(x => x.Year).ThenBy(x => x.Month))
+    {
+        var path = storage.Report(request.Account, period.Year, period.Month, documents);
+        paths.Add(path);
+        if (postgresConnection is not null)
+        {
+            var account = r.Read(s => s.Accounts.Single(a => a.Id == request.Account));
+            var taxId = account.TaxId ?? account.Id;
+            if (taxId.Length == 13 && taxId.All(char.IsAsciiDigit))
+            {
+                var bytes = File.ReadAllBytes(storage.Resolve(path));
+                var hash = DownloadPipeline.Hash(bytes);
+                var snapshot = Path.Combine(".deliveries", hash + ".xlsx");
+                var snapshotPath = storage.Resolve(snapshot);
+                Directory.CreateDirectory(Path.GetDirectoryName(snapshotPath)!);
+                var temporary = snapshotPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                try
+                {
+                    using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { file.Write(bytes); file.Flush(true); }
+                    try { File.Move(temporary, snapshotPath, false); }
+                    catch (IOException) when (File.Exists(snapshotPath) && DownloadPipeline.Hash(File.ReadAllBytes(snapshotPath)) == hash) { }
+                }
+                finally { if (File.Exists(temporary)) File.Delete(temporary); }
+                var name = $"Resumen_{period.Year:D4}_{period.Month:D2}.xlsx";
+                new RemoteDeliveryStore(postgresConnection).Enqueue((string)c.Items["PanelUser"]!, request.Account,
+                    $"report-{request.Account}-{period.Year:D4}-{period.Month:D2}", "xlsx", snapshot,
+                    $"{taxId}/{period.Year:D4}/{period.Month:D2}/Reportes/{name}", hash);
+            }
+        }
+    }
     return new { paths };
 });
 api.MapGet("/reports/{account}/{year:int}/{month:int}", (string account, int year, int month, IStorageProvider storage,IStateRepository r) =>
 {
     var names = new[] { "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre" }; _ = new DateOnly(year, month, 1); Validation.Identifier(account);
     var name=$"Resumen_{year:D4}_{month:D2}.xlsx";
-    var relative = Path.Combine(year.ToString("D4"), $"Resumen_{year:D4}_{account}.xlsx"); var path = storage.Resolve(relative);
+    var relative = Path.Combine(storage.AccountDirectory(account), year.ToString("D4"), $"{month:D2}-{names[month - 1]}", name); var path = storage.Resolve(relative);
+    var committed = r.Read(s => s.Executions.Where(e => e.Query.Account == account && e.Status is "Completed" or "CompletedWithWarnings")
+        .OrderByDescending(e => e.Finished).SelectMany(e => e.Reports).FirstOrDefault(report => report.Year == year && report.Month == month)?.Path);
+    if (committed is not null && File.Exists(storage.Resolve(committed))) path = storage.Resolve(committed);
     if(!File.Exists(path)){
+        var annual = storage.Resolve(Path.Combine(year.ToString("D4"), $"Resumen_{year:D4}_{account}.xlsx"));
+        if (File.Exists(annual)) path = annual;
         var candidates=r.Read(s=>s.Documents.Where(d=>d.Account==account&&d.Issued.Year==year&&d.Issued.Month==month).Select(d=>d.XmlPath??d.PdfPath).Where(p=>p is not null).Select(p=>Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(p!))!,name)).Distinct().ToList());
-        var previous=candidates.Select(storage.Resolve).FirstOrDefault(File.Exists);if(previous is not null)path=previous;
+        var previous=candidates.Select(storage.Resolve).FirstOrDefault(File.Exists);if(!File.Exists(path)&&previous is not null)path=previous;
     }
     if (!File.Exists(path)) throw new KeyNotFoundException("Genere primero el reporte."); return Results.File(path, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", Path.GetFileName(path));
 });
@@ -223,3 +342,6 @@ record PanelUserRequest(string Username, string Role, string Password);
 record PasswordChange(string CurrentPassword, string NewPassword);
 record RucAssignment(string Username, string Account, bool Assigned);
 record ReportRequest(string Account, int Year, int Month, DateOnly? To);
+record AgentRegistration(string Label);
+record DeliveryConfirmation(string Sha256);
+record DeliveryFailure(string Code);
