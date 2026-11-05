@@ -14,33 +14,44 @@ public sealed class ServerWorkerAuthentication(IStateRepository repository, Sess
         var taxId = account.TaxId ?? account.Id;
         var vault = scopedVault ?? SriPortal.Vault();
         SessionData? saved = null;
-        try { saved = vault.Load(account.Id, taxId); } catch (HumanActionRequiredException) { }
+        try { saved = vault.Load(account.Id, taxId); Log(executionId, "session_loaded"); } catch (HumanActionRequiredException) { Log(executionId, "session_unavailable"); }
         var op = repository.Update(s => {
             var operation = new AuthenticationOperation { Account = account.Id, ExecutionId = executionId, Owner = "Worker", Status = "OpeningBrowser", Message = "El Worker está comprobando el acceso al SRI." };
             s.Authentications.Add(operation);
             if (executionId is not null) ExecutionProgress.Set(s, executionId, "OpeningBrowser", operation.Message);
             return operation;
         });
+        var phase = "playwright_init";
         try
         {
+            Log(executionId, phase);
             using var playwright = await Playwright.CreateAsync();
-            await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
+            phase = "chromium_launch";
+            Log(executionId, phase);
+            await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true, Timeout = 30000 });
+            Log(executionId, "chromium_started");
+            phase = "browser_context";
             var context = await browser.NewContextAsync(new() { StorageState = saved?.StorageState });
             if (saved?.SessionStorage is not null) await context.AddInitScriptAsync("if(location.origin==='https://srienlinea.sri.gob.ec'){for(const [k,v] of Object.entries(JSON.parse(" + System.Text.Json.JsonSerializer.Serialize(saved.SessionStorage) + "))){sessionStorage.setItem(k,v)}}");
             var page = await context.NewPageAsync();
             using var registration = cancellation.Register(() => { _ = context.CloseAsync(); });
+            phase = "sri_navigation";
+            Log(executionId, phase);
             await page.GotoAsync(SriAccessEvidence.LoginUrl, new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 45000 });
+            Log(executionId, "sri_navigation_completed");
+            phase = "authentication";
             bool submitted = false, opened = false;
             for (var i = 0; i < 60; i++)
             {
                 cancellation.ThrowIfCancellationRequested();
-                if (await SriAccessEvidence.HumanChallenge(page)) throw new HumanActionRequiredException("El SRI solicita una verificación humana. La operación quedó pendiente de intervención.");
+                if (await SriAccessEvidence.HumanChallenge(page)) { Log(executionId, "human_challenge"); throw new HumanActionRequiredException("El SRI solicita una verificación humana. La operación quedó pendiente de intervención."); }
                 if (await SriAccessEvidence.Matches(page, taxId))
                 {
                     var sessionStorage = await page.EvaluateAsync<string>("() => JSON.stringify(Object.fromEntries(Object.entries(sessionStorage)))");
                     var session = new SessionData(account.Id, taxId, DateTimeOffset.UtcNow.AddMinutes(30), await context.StorageStateAsync(), sessionStorage);
                     vault.Save(session);
                     repository.Update(s => { var a = s.Authentications.Single(x => x.Id == op.Id); a.Status = "Authenticated"; a.SessionVerified = true; a.VerifiedAt = DateTimeOffset.UtcNow; a.Expires = session.Expires; a.Message = "Acceso SRI verificado por el Worker."; return true; });
+                    Log(executionId, "authentication_verified");
                     return session;
                 }
                 if (!opened && await InteractiveNavigation.IsOfficialDocument(page))
@@ -50,14 +61,17 @@ public sealed class ServerWorkerAuthentication(IStateRepository repository, Sess
                 }
                 if (!submitted && await page.Locator("input[type=password]:visible").CountAsync() == 1)
                 {
+                    Log(executionId, "login_form_detected");
                     if (!CredentialVault.Configured().Present(account.Id)) throw new HumanActionRequiredException("Configure la credencial cifrada de la cuenta para acceder al SRI.");
                     var accepted = false;
                     await CredentialVault.Configured().Use(account.Id, taxId, async password => accepted = await AuthorizedLogin.Submit(page, taxId, password));
                     if (!accepted) throw new HumanActionRequiredException("No se reconoció un formulario seguro de acceso al SRI.");
                     submitted = true;
+                    Log(executionId, "credentials_submitted");
                 }
                 await Task.Delay(1000, cancellation);
             }
+            Log(executionId, "authentication_unverified");
             throw new HumanActionRequiredException("No se pudo verificar el acceso al SRI. Revise la credencial o una posible validación humana antes de reanudar.");
         }
         catch (PlaywrightException) when (cancellation.IsCancellationRequested)
@@ -67,14 +81,29 @@ public sealed class ServerWorkerAuthentication(IStateRepository repository, Sess
         }
         catch (HumanActionRequiredException ex)
         {
+            Log(executionId, "human_action_required", phase);
             repository.Update(s => { var a = s.Authentications.Single(x => x.Id == op.Id); a.Status = "RequiresHumanAction"; a.Message = ex.Message; return true; });
             throw;
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            Log(executionId, ClassifyFailure(ex, phase), phase);
             repository.Update(s => { var a = s.Authentications.Single(x => x.Id == op.Id); a.Status = cancellation.IsCancellationRequested ? "Cancelled" : "Failed"; a.Message = "El Worker no pudo verificar el acceso al SRI."; return true; });
             throw;
         }
+    }
+    // Only fixed event names and an execution ID are emitted: exception messages can contain secrets or URLs.
+    private static void Log(string? executionId, string eventName, string? phase = null) =>
+        Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { component = "sri_auth", executionId, eventName, phase }));
+
+    public static string ClassifyFailure(Exception ex, string phase)
+    {
+        if (ex is UnauthorizedAccessException) return "permission_error";
+        if (ex is TimeoutException || ex.Message.Contains("Timeout", StringComparison.OrdinalIgnoreCase)) return "timeout";
+        if (ex.Message.Contains("net::ERR_", StringComparison.OrdinalIgnoreCase)) return "connection_error";
+        if (phase is "playwright_init" or "chromium_launch" or "browser_context") return "browser_start_error";
+        if (ex is System.Security.Cryptography.CryptographicException or InvalidDataException) return "protected_data_error";
+        return "unexpected_error";
     }
     public Task<bool> Tick(CancellationToken stop)
     {
