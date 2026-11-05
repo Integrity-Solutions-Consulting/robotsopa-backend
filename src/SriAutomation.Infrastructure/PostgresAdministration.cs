@@ -27,9 +27,9 @@ public static class PostgresAdministration
         using var db = new NpgsqlConnection(connectionString); db.Open();
         foreach (var (table, columns) in RequiredColumns)
         {
-            using var relation = new NpgsqlCommand("SELECT to_regclass(@name)", db);
+            using var relation = new NpgsqlCommand("SELECT to_regclass(@name) IS NOT NULL", db);
             relation.Parameters.AddWithValue("name", table);
-            if (relation.ExecuteScalar() is null or DBNull) throw new InvalidOperationException($"Esquema PostgreSQL incompatible: falta la tabla {table}.");
+            if (relation.ExecuteScalar() is not true) throw new InvalidOperationException($"Esquema PostgreSQL incompatible: falta la tabla {table}.");
             foreach (var (column, type) in columns)
             {
                 using var check = new NpgsqlCommand("SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid=to_regclass(@table) AND attname=@column AND attnum>0 AND NOT attisdropped", db);

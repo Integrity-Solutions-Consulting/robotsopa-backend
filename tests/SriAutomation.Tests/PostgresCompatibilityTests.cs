@@ -17,6 +17,15 @@ public sealed class IsolatedPostgresFactAttribute : FactAttribute
 public class PostgresCompatibilityTests
 {
     [IsolatedPostgresFact]
+    public void MissingTableIsReportedWithoutRegclassConversionError()
+    {
+        using var fixture = new SchemaFixture();
+        fixture.Execute("DROP TABLE delivery_agents");
+        var error = Assert.Throws<InvalidOperationException>(() => PostgresAdministration.Verify(fixture.ConnectionString));
+        Assert.Contains("falta la tabla delivery_agents", error.Message);
+    }
+
+    [IsolatedPostgresFact]
     public void CompatibleSchemaDoesNotRequireMigrationHistory()
     {
         using var fixture = new SchemaFixture();
