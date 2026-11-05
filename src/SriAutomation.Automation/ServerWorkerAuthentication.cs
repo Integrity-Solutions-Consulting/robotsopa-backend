@@ -1,4 +1,5 @@
 using Microsoft.Playwright;
+using System.Diagnostics;
 using SriAutomation.Application;
 using SriAutomation.Domain;
 using SriAutomation.Infrastructure;
@@ -36,8 +37,47 @@ public sealed class ServerWorkerAuthentication(IStateRepository repository, Sess
             var page = await context.NewPageAsync();
             using var registration = cancellation.Register(() => { _ = context.CloseAsync(); });
             phase = "sri_navigation";
+            var navigationClock = Stopwatch.StartNew();
+            var resourceFailures = 0;
+            var mainResponseStatus = 0;
+            var mainFailure = "unknown";
+            EventHandler<IRequest> onRequest = (_, request) => {
+                if (request.IsNavigationRequest && request.Frame == page.MainFrame)
+                    LogNavigation(executionId, request.RedirectedFrom is null ? "navigation_request" : "navigation_redirect", navigationClock.ElapsedMilliseconds, SafeDestination(request.Url));
+            };
+            EventHandler<IResponse> onResponse = (_, response) => {
+                if (response.Request.IsNavigationRequest && response.Request.Frame == page.MainFrame) {
+                    mainResponseStatus = response.Status;
+                    LogNavigation(executionId, "navigation_response", navigationClock.ElapsedMilliseconds, SafeDestination(response.Url), response.Status);
+                } else if (response.Status >= 400 && Interlocked.Increment(ref resourceFailures) <= 20)
+                    LogNavigation(executionId, "resource_response_error", navigationClock.ElapsedMilliseconds, SafeDestination(response.Url), response.Status, resourceType: SafeResourceType(response.Request.ResourceType));
+            };
+            EventHandler<IRequest> onFailed = (_, request) => {
+                var failure = ClassifyNetworkFailure(request.Failure);
+                if (request.IsNavigationRequest && request.Frame == page.MainFrame) {
+                    mainFailure = failure;
+                    LogNavigation(executionId, "navigation_request_failed", navigationClock.ElapsedMilliseconds, SafeDestination(request.Url), failure: failure);
+                } else if (Interlocked.Increment(ref resourceFailures) <= 20)
+                    LogNavigation(executionId, "resource_request_failed", navigationClock.ElapsedMilliseconds, SafeDestination(request.Url), failure: failure, resourceType: SafeResourceType(request.ResourceType));
+            };
+            EventHandler<IPage> onDomContentLoaded = (_, _) =>
+                LogNavigation(executionId, "dom_content_loaded", navigationClock.ElapsedMilliseconds, SafeDestination(page.Url));
+            page.Request += onRequest;
+            page.Response += onResponse;
+            page.RequestFailed += onFailed;
+            page.DOMContentLoaded += onDomContentLoaded;
             Log(executionId, phase);
-            await page.GotoAsync(SriAccessEvidence.LoginUrl, new() { WaitUntil = WaitUntilState.DOMContentLoaded, Timeout = 45000 });
+            try {
+                await OpenDocument(page, SriAccessEvidence.LoginUrl, 45000);
+            }
+            catch (Exception ex) when (!cancellation.IsCancellationRequested && (ex is TimeoutException || ex is PlaywrightException)) {
+                var reason = mainFailure != "unknown" ? mainFailure : ex is TimeoutException ? "document_commit_timeout" : "navigation_error";
+                LogNavigation(executionId, "navigation_error", navigationClock.ElapsedMilliseconds, SafeDestination(page.Url), mainResponseStatus == 0 ? null : mainResponseStatus, reason);
+                throw new InvalidOperationException("No se pudo recibir el documento principal del SRI (" + reason + ").");
+            }
+            finally {
+                LogNavigation(executionId, "navigation_wait_finished", navigationClock.ElapsedMilliseconds, SafeDestination(page.Url), mainResponseStatus == 0 ? null : mainResponseStatus);
+            }
             Log(executionId, "sri_navigation_completed");
             phase = "authentication";
             bool submitted = false, opened = false;
@@ -45,7 +85,7 @@ public sealed class ServerWorkerAuthentication(IStateRepository repository, Sess
             {
                 cancellation.ThrowIfCancellationRequested();
                 if (await SriAccessEvidence.HumanChallenge(page)) { Log(executionId, "human_challenge"); throw new HumanActionRequiredException("El SRI solicita una verificación humana. La operación quedó pendiente de intervención."); }
-                if (await SriAccessEvidence.Matches(page, taxId))
+                if (await page.Locator("body").CountAsync() > 0 && await SriAccessEvidence.Matches(page, taxId))
                 {
                     var sessionStorage = await page.EvaluateAsync<string>("() => JSON.stringify(Object.fromEntries(Object.entries(sessionStorage)))");
                     var session = new SessionData(account.Id, taxId, DateTimeOffset.UtcNow.AddMinutes(30), await context.StorageStateAsync(), sessionStorage);
@@ -71,7 +111,7 @@ public sealed class ServerWorkerAuthentication(IStateRepository repository, Sess
                 }
                 await Task.Delay(1000, cancellation);
             }
-            Log(executionId, "authentication_unverified");
+            LogNavigation(executionId, "authentication_unverified", navigationClock.ElapsedMilliseconds, SafeDestination(page.Url), mainResponseStatus == 0 ? null : mainResponseStatus, resourceFailures > 0 ? "secondary_resource_errors" : "no_verified_login");
             throw new HumanActionRequiredException("No se pudo verificar el acceso al SRI. Revise la credencial o una posible validación humana antes de reanudar.");
         }
         catch (PlaywrightException) when (cancellation.IsCancellationRequested)
@@ -92,9 +132,33 @@ public sealed class ServerWorkerAuthentication(IStateRepository repository, Sess
             throw;
         }
     }
+    public static Task<IResponse?> OpenDocument(IPage page, string url, float timeout) =>
+        page.GotoAsync(url, new() { WaitUntil = WaitUntilState.Commit, Timeout = timeout });
+
     // Only fixed event names and an execution ID are emitted: exception messages can contain secrets or URLs.
     private static void Log(string? executionId, string eventName, string? phase = null) =>
         Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { component = "sri_auth", executionId, eventName, phase }));
+
+    // URLs may contain credentials or authorization codes, including in their path or host.
+    public static string SafeDestination(string? url) => Uri.TryCreate(url, UriKind.Absolute, out var uri)
+        && uri.Scheme == Uri.UriSchemeHttps && uri.Host == "srienlinea.sri.gob.ec" && uri.IsDefaultPort
+        ? "https://srienlinea.sri.gob.ec" : "other_or_unavailable";
+
+    public static string ClassifyNetworkFailure(string? failure)
+    {
+        if (failure is null) return "unknown";
+        if (failure.Contains("ERR_CERT_", StringComparison.OrdinalIgnoreCase) || failure.Contains("ERR_SSL_", StringComparison.OrdinalIgnoreCase)) return "tls_error";
+        if (failure.Contains("ERR_NAME_", StringComparison.OrdinalIgnoreCase)) return "dns_error";
+        if (failure.Contains("TIMED_OUT", StringComparison.OrdinalIgnoreCase)) return "connection_timeout";
+        if (failure.Contains("ERR_CONNECTION_", StringComparison.OrdinalIgnoreCase)) return "connection_error";
+        if (failure.Contains("ERR_ABORTED", StringComparison.OrdinalIgnoreCase)) return "aborted";
+        return "other_network_error";
+    }
+
+    public static string SafeResourceType(string? type) => type is "document" or "stylesheet" or "image" or "media" or "font" or "script" or "texttrack" or "xhr" or "fetch" or "eventsource" or "websocket" or "manifest" or "other" ? type : "other";
+
+    private static void LogNavigation(string? executionId, string eventName, long elapsedMs, string destination, int? httpStatus = null, string? failure = null, string? resourceType = null) =>
+        Console.Error.WriteLine(System.Text.Json.JsonSerializer.Serialize(new { component = "sri_auth", executionId, eventName, phase = "sri_navigation", elapsedMs, destination, httpStatus, failure, resourceType }));
 
     public static string ClassifyFailure(Exception ex, string phase)
     {
