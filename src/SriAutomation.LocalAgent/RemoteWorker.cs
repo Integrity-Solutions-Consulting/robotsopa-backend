@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.Http.Json;
 using Microsoft.Playwright;
 using SriAutomation.Application;
@@ -9,7 +9,7 @@ namespace SriAutomation.LocalAgent;
 
 internal static class RemoteWorker
 {
-    public static async Task RunAsync()
+    public static async Task RunAsync(CancellationToken cancellation = default)
     {
         var address = Environment.GetEnvironmentVariable("SRI_AGENT_API") ?? "https://botisc.dokploy.integritysolutions.com.ec/";
         var id = Environment.GetEnvironmentVariable("SRI_DELIVERY_AGENT_ID"); var secret = Environment.GetEnvironmentVariable("SRI_DELIVERY_AGENT_SECRET");
@@ -22,7 +22,7 @@ internal static class RemoteWorker
         using var singleton = new FileStream(Path.Combine(directory, "remote-worker.lock"), FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = uri, Timeout = TimeSpan.FromSeconds(30) };
         client.DefaultRequestHeaders.Add("X-Delivery-Agent-Id", id); client.DefaultRequestHeaders.Add("X-Delivery-Agent-Secret", secret);
-        using var shutdown = new CancellationTokenSource();
+        using var shutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; shutdown.Cancel(); };
         using var deliveryStop = CancellationTokenSource.CreateLinkedTokenSource(shutdown.Token);
         var desktop = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "SRI-Automation");
@@ -46,7 +46,7 @@ internal static class RemoteWorker
             {
                 using var response = await client.PostAsync("/execution-agent/v1/claim", null, shutdown.Token);
                 if (response.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
-                { Console.Error.WriteLine($"API respondió HTTP {(int)response.StatusCode}; revise identidad y configuración del backend."); return; }
+                { Console.Error.WriteLine($"API respondiÃ³ HTTP {(int)response.StatusCode}; revise identidad y configuraciÃ³n del backend."); return; }
                 response.EnsureSuccessStatusCode();
                 delay = 2;
                 if (response.StatusCode != HttpStatusCode.NoContent)
@@ -59,7 +59,7 @@ internal static class RemoteWorker
             catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { break; }
             catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException or IOException or System.Text.Json.JsonException)
             {
-                Console.Error.WriteLine("Conexión interrumpida; reintentando sin exponer credenciales.");
+                Console.Error.WriteLine("ConexiÃ³n interrumpida; reintentando sin exponer credenciales.");
                 try { await Task.Delay(TimeSpan.FromSeconds(delay), shutdown.Token).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { break; }
                 delay = Math.Min(delay * 2, 60);
@@ -81,7 +81,7 @@ internal static class RemoteWorker
         {
             var job = remote.Read(s => s.Executions.Single());
             var account = remote.Read(s => s.Accounts.Single()); var taxId = account.TaxId ?? account.Id;
-            if (taxId.Length != 13 || !taxId.All(char.IsAsciiDigit)) throw new HumanActionRequiredException("RUC inválido.");
+            if (taxId.Length != 13 || !taxId.All(char.IsAsciiDigit)) throw new HumanActionRequiredException("RUC invÃ¡lido.");
             Console.WriteLine("Trabajo recibido. Iniciando acceso al portal oficial del SRI.");
             for (var sessionAttempt = 0; ; sessionAttempt++)
             {
@@ -90,7 +90,7 @@ internal static class RemoteWorker
             var context = await browser.NewContextAsync(new() { AcceptDownloads = true });
             using var close = work.Token.Register(() => { _ = context.CloseAsync(); });
             var page = await context.NewPageAsync();
-            remote.Update(s => { ExecutionProgress.Set(s, job.Id, "AuthenticatingApplication", "Iniciando sesión en el portal oficial del SRI."); return true; });
+            remote.Update(s => { ExecutionProgress.Set(s, job.Id, "AuthenticatingApplication", "Iniciando sesiÃ³n en el portal oficial del SRI."); return true; });
             if (!await InteractiveNavigation.TryOpen(page, SriAccessEvidence.LoginUrl)) throw new HumanActionRequiredException("No se pudo abrir el portal.");
             BoundSriSession? bound = null;
             var submitted = false; var opened = false;
@@ -103,19 +103,19 @@ internal static class RemoteWorker
                     if ((await SriAccessEvidence.Inspect(candidate, taxId)).Verified) { page = candidate; bound = await BoundSriSession.Verify(page, taxId); break; }
                     if (!opened && await InteractiveNavigation.IsOfficialDocument(candidate))
                     {
-                        var entry = candidate.GetByRole(AriaRole.Link, new() { Name = "Ir a iniciar sesión", Exact = true });
+                        var entry = candidate.GetByRole(AriaRole.Link, new() { Name = "Ir a iniciar sesiÃ³n", Exact = true });
                         if (await entry.CountAsync() == 1 && await entry.IsVisibleAsync()) { opened = true; await entry.ClickAsync(); }
                     }
                     if (!submitted && await candidate.Locator("input[type=password]:visible").CountAsync() == 1)
                     {
-                        if (!await remote.SubmitCredentials(candidate, taxId, work.Token)) throw new HumanActionRequiredException("No se reconoció un formulario autorizado.");
+                        if (!await remote.SubmitCredentials(candidate, taxId, work.Token)) throw new HumanActionRequiredException("No se reconociÃ³ un formulario autorizado.");
                         submitted = true;
                     }
                 }
                 if (bound is not null) break;
                 await Task.Delay(1000, work.Token);
             }
-            if (bound is null) throw new HumanActionRequiredException("No se confirmó la identidad SRI.");
+            if (bound is null) throw new HumanActionRequiredException("No se confirmÃ³ la identidad SRI.");
             remote.Update(s => { ExecutionProgress.Set(s, job.Id, "OpeningQuery", "Abriendo la consulta SRI autorizada."); return true; });
             page = await AuthorizedQueryNavigation.Open(page, bound, taxId, work.Token, authenticate: p => remote.SubmitCredentials(p, taxId, work.Token), humanAction: p => WaitForHuman(p, remote, job.Id, work.Token));
             var profile = await ObservedPortalProfile.Discover(page, taxId, session: bound); profile.Validate();
@@ -131,42 +131,42 @@ internal static class RemoteWorker
             catch (PortalRecognitionException ex) when (ex.Code == "LoginRequired" && sessionAttempt == 0 && !work.IsCancellationRequested)
             {
                 job = remote.Read(s => s.Executions.Single());
-                Console.WriteLine("Sesión expirada; recuperando la consulta desde el último punto confirmado.");
+                Console.WriteLine("SesiÃ³n expirada; recuperando la consulta desde el Ãºltimo punto confirmado.");
                 continue;
             }
             break;
             }
             using var finish = await remote.PostAsync("finish", work.Token); finish.EnsureSuccessStatusCode();
             var result = await finish.Content.ReadFromJsonAsync<FinishResult>(cancellationToken: work.Token);
-            Console.WriteLine(result?.Status is "Completed" or "CompletedWithWarnings" ? "Trabajo finalizado; consulte los resultados en el panel." : "El backend terminó el procesamiento sin confirmar éxito; revise el historial.");
+            Console.WriteLine(result?.Status is "Completed" or "CompletedWithWarnings" ? "Trabajo finalizado; consulte los resultados en el panel." : "El backend terminÃ³ el procesamiento sin confirmar Ã©xito; revise el historial.");
         }
-        catch (OperationCanceledException) when (work.IsCancellationRequested) { Console.Error.WriteLine("Ejecución detenida por cancelación o pérdida de conexión."); }
+        catch (OperationCanceledException) when (work.IsCancellationRequested) { Console.Error.WriteLine("EjecuciÃ³n detenida por cancelaciÃ³n o pÃ©rdida de conexiÃ³n."); }
         catch (HumanActionRequiredException ex) when (ex.Message == "HumanChallenge")
         {
-            Console.Error.WriteLine("El SRI solicita CAPTCHA o MFA; revise el historial y reanude con intervención autorizada.");
+            Console.Error.WriteLine("El SRI solicita CAPTCHA o MFA; revise el historial y reanude con intervenciÃ³n autorizada.");
             try { using var result = await remote.StopForHumanChallenge(); } catch (Exception) { }
         }
         catch (PortalRecognitionException ex) when (ex.Code == "HumanChallenge")
         {
-            Console.Error.WriteLine("El SRI solicita CAPTCHA o MFA; revise el historial y reanude con intervención autorizada.");
+            Console.Error.WriteLine("El SRI solicita CAPTCHA o MFA; revise el historial y reanude con intervenciÃ³n autorizada.");
             try { using var result = await remote.StopForHumanChallenge(); } catch (Exception) { }
         }
         catch (Exception ex) when (ex is HumanActionRequiredException or PortalRecognitionException or PlaywrightException or TimeoutException or IOException or HttpRequestException or InvalidOperationException)
         {
-            Console.Error.WriteLine("Ejecución detenida; revise el historial y la ventana SRI.");
+            Console.Error.WriteLine("EjecuciÃ³n detenida; revise el historial y la ventana SRI.");
             try { using var result = await remote.PostAsync("stop", CancellationToken.None); } catch (Exception) { }
         }
         catch (Exception)
         {
-            Console.Error.WriteLine("Ejecución interrumpida; revise el historial.");
+            Console.Error.WriteLine("EjecuciÃ³n interrumpida; revise el historial.");
             try { using var result = await remote.PostAsync("stop", CancellationToken.None); } catch (Exception) { }
         }
         finally { work.Cancel(); await renewal; }
     }
     internal static async Task WaitForHuman(IPage page, RemoteOwnedExecution remote, string jobId, CancellationToken token)
     {
-        remote.Update(s => { ExecutionProgress.Set(s, jobId, "WaitingForHuman", "El SRI solicita verificación humana."); return true; });
-        Console.WriteLine("El SRI solicita CAPTCHA o MFA. Complete la verificación en la ventana oficial.");
+        remote.Update(s => { ExecutionProgress.Set(s, jobId, "WaitingForHuman", "El SRI solicita verificaciÃ³n humana."); return true; });
+        Console.WriteLine("El SRI solicita CAPTCHA o MFA. Complete la verificaciÃ³n en la ventana oficial.");
         await page.BringToFrontAsync();
         for (var i = 0; i < 600; i++)
         {
@@ -240,3 +240,4 @@ internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim
     private sealed record Renewal(bool Cancelled);
     private sealed record RemoteCredential(string Username, string Password);
 }
+

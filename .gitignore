@@ -67,3 +67,6 @@ logs/
 .DS_Store
 Thumbs.db
 desktop.ini
+# Bot installer outputs
+installer/publish/
+installer/output/

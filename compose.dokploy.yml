@@ -1,4 +1,4 @@
-services:
+﻿services:
   api:
     build:
       context: .
@@ -54,7 +54,7 @@ services:
       SRI_SHAREPOINT_DRIVE_ID: ${SRI_SHAREPOINT_DRIVE_ID:-}
       SRI_SHAREPOINT_FOLDER: ${SRI_SHAREPOINT_FOLDER:-}
       SRI_WORKER_PAUSED: ${SRI_WORKER_PAUSED:-true}
-      SRI_WORKER_REMOTE_SRI: ${SRI_WORKER_REMOTE_SRI:-false}
+      SRI_WORKER_REMOTE_SRI: ${SRI_WORKER_REMOTE_SRI:-true}
       SRI_OUTPUT_PATH: /app/downloads
       SRI_STATE_PATH: /app/storage
       SRI_SESSION_PATH: /app/sessions
@@ -89,3 +89,4 @@ volumes:
   downloads:
   sessions:
   credentials:
+
