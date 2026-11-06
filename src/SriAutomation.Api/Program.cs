@@ -54,15 +54,15 @@ app.Use(async (context, next) =>
         if (context.Request.Path.StartsWithSegments("/api"))
         {
             if (context.Request.Method is not "GET" and not "HEAD" && context.Request.Headers.Origin.FirstOrDefault() is { } origin &&
-                (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || (uri.Authority != context.Request.Host.Value && !allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase)))) { context.Response.StatusCode = 403; return; }
+                (!Uri.TryCreate(origin, UriKind.Absolute, out var uri) || (uri.Authority != context.Request.Host.Value && !allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase)))) { DeliveryRegistrationDiagnostics.Rejected(context, app.Logger, "ORIGIN_UNAUTHORIZED"); context.Response.StatusCode = 403; return; }
             if (context.Request.Path != "/api/v1/auth/login")
             {
                 var token = context.Request.Cookies["sri-session"];
-                if (token is null || !sessions.TryGetValue(token, out var session) || session.Expiry <= DateTimeOffset.UtcNow) { context.Response.StatusCode = 401; return; }
+                if (token is null || !sessions.TryGetValue(token, out var session) || session.Expiry <= DateTimeOffset.UtcNow) { DeliveryRegistrationDiagnostics.Rejected(context, app.Logger, "SESSION_INVALID"); context.Response.StatusCode = 401; return; }
                 context.Items["PanelUser"] = session.User;
                 context.Items["PanelRole"] = session.Role;
-                if (session.Role == "asistente" && !await AssistantAccess.Allowed(context, database, app.Services.GetRequiredService<IStateRepository>())) { context.Response.StatusCode = 403; return; }
-                if (session.MustChange && context.Request.Path != "/api/v1/auth/session" && context.Request.Path != "/api/v1/auth/change-password" && context.Request.Path != "/api/v1/auth/logout") { context.Response.StatusCode = 403; return; }
+                if (session.Role == "asistente" && !await AssistantAccess.Allowed(context, database, app.Services.GetRequiredService<IStateRepository>())) { DeliveryRegistrationDiagnostics.Rejected(context, app.Logger, "ROLE_UNAUTHORIZED"); context.Response.StatusCode = 403; return; }
+                if (session.MustChange && context.Request.Path != "/api/v1/auth/session" && context.Request.Path != "/api/v1/auth/change-password" && context.Request.Path != "/api/v1/auth/logout") { DeliveryRegistrationDiagnostics.Rejected(context, app.Logger, "PASSWORD_CHANGE_REQUIRED"); context.Response.StatusCode = 403; return; }
             }
         }
         await next();
@@ -106,7 +106,7 @@ if (postgresConnection is not null)
     });
     api.MapPost("/delivery-agents", (AgentRegistration input, HttpContext context) =>
     {
-        if (!context.Request.IsHttps) return Results.Problem("Se requiere HTTPS. Si usa un proxy inverso, configure su IP o red confiable y X-Forwarded-Proto.", statusCode: 403);
+        if (!context.Request.IsHttps) { DeliveryRegistrationDiagnostics.Rejected(context, app.Logger, "HTTPS_NOT_RECOGNIZED"); return Results.Problem("Se requiere HTTPS. Si usa un proxy inverso, configure su IP o red confiable y X-Forwarded-Proto.", statusCode: 403); }
         var created = agentCredentials.Register((string)context.Items["PanelUser"]!, input.Label);
         context.Response.Headers.CacheControl = "no-store";
         return Results.Ok(new { id = created.Id, secret = created.Secret });
