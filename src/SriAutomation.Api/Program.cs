@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text;
 using System.Threading.RateLimiting;
@@ -40,8 +40,10 @@ builder.Services.AddRateLimiter(o => o.AddFixedWindowLimiter("login", x => { x.P
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20_000_000);
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
+var isolatedTlsProxy = IsolatedTlsProxy.Configure(Environment.GetEnvironmentVariable("SRI_TLS_PROXY_ISOLATED"), secureCookie, trustedProxies.Length > 0 || trustedNetworks.Length > 0);
 var app = builder.Build();
 if (trustedProxies.Length > 0 || trustedNetworks.Length > 0) app.UseForwardedHeaders();
+if (isolatedTlsProxy) app.Use((context, next) => { IsolatedTlsProxy.Apply(context, true); return next(); });
 app.UseCors();
 var database = app.Services.GetRequiredService<IPanelDatabase>();
 if (postgresConnection is null) { database.Initialize(adminUsername!, password!); database.SyncAudit(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Audit.ToList())); database.SyncAccounts(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Accounts.ToList())); }
@@ -69,7 +71,7 @@ app.Use(async (context, next) =>
     }
     catch (Exception ex) when (ex is ArgumentException or InvalidDataException or KeyNotFoundException or System.Xml.XmlException)
     { await Results.Problem(ex.Message, statusCode: ex is KeyNotFoundException ? 404 : 400).ExecuteAsync(context); }
-    catch (BadHttpRequestException) { await Results.Problem("Solicitud inválida. Revise los campos admitidos.",statusCode:400).ExecuteAsync(context); }
+    catch (BadHttpRequestException) { await Results.Problem("Solicitud invÃ¡lida. Revise los campos admitidos.",statusCode:400).ExecuteAsync(context); }
     catch (IOException) { await Results.Problem("Almacenamiento ocupado o no disponible. Reintente.", statusCode: 503).ExecuteAsync(context); }
     catch (Exception ex) { app.Logger.LogError("Error interno de tipo {Type}", ex.GetType().Name); await Results.Problem("Error interno.", statusCode: 500).ExecuteAsync(context); }
     finally { AuditEndpoints.RecordRequest(context, app.Services.GetRequiredService<IStateRepository>()); }
@@ -79,15 +81,15 @@ app.MapGet("/health/ready", () => { try { if (postgresConnection is null) return
 if (postgresConnection is not null)
     app.Services.GetRequiredService<IStateRepository>().Read(s => {
         if (s.Accounts.Any(a => !a.IsTest && a.Id.StartsWith("qa-", StringComparison.Ordinal) && a.Name.StartsWith("QA FICTICIA", StringComparison.Ordinal)))
-            throw new InvalidOperationException("El estado contiene cuentas de prueba antiguas sin marcar; revise su clasificación antes de iniciar.");
+            throw new InvalidOperationException("El estado contiene cuentas de prueba antiguas sin marcar; revise su clasificaciÃ³n antes de iniciar.");
         if (s.AuthenticationMode != "EncryptedProfilesV4" && (s.Authentications.Count > 0 || s.Executions.Any(e => e.Query.Mode == "Sri" && e.Status is "Pending" or "Running")))
-            throw new InvalidOperationException("El estado contiene autenticaciones o trabajos SRI antiguos que requieren revisión segura antes de iniciar.");
+            throw new InvalidOperationException("El estado contiene autenticaciones o trabajos SRI antiguos que requieren revisiÃ³n segura antes de iniciar.");
         return true;
     });
 else app.Services.GetRequiredService<IStateRepository>().Update(s => { DataScope.MarkLegacyFixtures(s);
 if(s.AuthenticationMode!="EncryptedProfilesV4") {
  foreach(var op in s.Authentications){op.SessionVerified=false;op.Expires=null;op.Command="";op.Status="Cancelled";op.BrowserOpened=false;}
- foreach(var job in s.Executions.Where(e=>e.Query.Mode=="Sri"&&e.Status is "Pending" or "Running")){job.Status=job.Stage="RequiresHumanAction";job.Message="Flujo de acceso actualizado. Confirme la reanudación desde Angular.";}
+ foreach(var job in s.Executions.Where(e=>e.Query.Mode=="Sri"&&e.Status is "Pending" or "Running")){job.Status=job.Stage="RequiresHumanAction";job.Message="Flujo de acceso actualizado. Confirme la reanudaciÃ³n desde Angular.";}
  s.AuthenticationMode="EncryptedProfilesV4";
 } return true; });
 var api = app.MapGroup("/api/v1");
@@ -106,14 +108,14 @@ if (postgresConnection is not null)
     });
     api.MapPost("/delivery-agents", (AgentRegistration input, HttpContext context) =>
     {
-        if (!context.Request.IsHttps) { DeliveryRegistrationDiagnostics.Rejected(context, app.Logger, "HTTPS_NOT_RECOGNIZED"); return Results.Problem("Se requiere HTTPS. Si usa un proxy inverso, configure su IP o red confiable y X-Forwarded-Proto.", statusCode: 403); }
+        if (!context.Request.IsHttps) { DeliveryRegistrationDiagnostics.Rejected(context, app.Logger, "HTTPS_NOT_RECOGNIZED"); return Results.Problem("Se requiere HTTPS. Revise la configuración segura del proxy TLS.", statusCode: 403); }
         var created = agentCredentials.Register((string)context.Items["PanelUser"]!, input.Label);
         context.Response.Headers.CacheControl = "no-store";
         return Results.Ok(new { id = created.Id, secret = created.Secret });
     });
     api.MapPost("/delivery-agents/{id:guid}/rotate", (Guid id, HttpContext context) =>
     {
-        if (!context.Request.IsHttps) return Results.Problem("Se requiere HTTPS. Si usa un proxy inverso, configure su IP o red confiable y X-Forwarded-Proto.", statusCode: 403);
+        if (!context.Request.IsHttps) return Results.Problem("Se requiere HTTPS. Revise la configuración segura del proxy TLS.", statusCode: 403);
         context.Response.Headers.CacheControl = "no-store";
         var secret = agentCredentials.Rotate(id, (string)context.Items["PanelUser"]!);
         return secret is null ? Results.NotFound() : Results.Ok(new { id, secret });
@@ -218,7 +220,7 @@ api.MapPost("/users", (PanelUserRequest request, HttpContext c) => {
 api.MapGet("/assignments/{username}", (string username, HttpContext c) => c.Items["PanelRole"] as string == "admin" ? Results.Ok(database.AssignedAccounts(username)) : Results.StatusCode(403));
 api.MapPost("/assignments", (RucAssignment assignment,HttpContext c) => { if(c.Items["PanelRole"] as string != "admin") return Results.StatusCode(403); database.Assign(assignment.Username,assignment.Account,assignment.Assigned); return Results.Ok(new {saved=true}); });
 api.MapGet("/accounts", (IStateRepository r, HttpContext c) => r.Read(s => s.Accounts.Where(a => (!a.IsTest || TestView(c)) && Allowed(c,database,a.Id)).ToList()));
-api.MapPost("/accounts", (Account a, IStateRepository r, HttpContext c) => r.Update(s => { a = a with { IsTest = a.IsTest || TestView(c) }; Validation.Identifier(a.Id); if (!string.IsNullOrEmpty(a.TaxId) && (a.TaxId.Length != 13 || !a.TaxId.All(char.IsAsciiDigit))) throw new ArgumentException("RUC inválido."); if (string.IsNullOrWhiteSpace(a.Name) || a.Name.Length > 150 || s.Accounts.Any(x => x.Id == a.Id)) throw new ArgumentException("Nombre inválido o cuenta existente."); s.Accounts.Add(a); return a; }));
+api.MapPost("/accounts", (Account a, IStateRepository r, HttpContext c) => r.Update(s => { a = a with { IsTest = a.IsTest || TestView(c) }; Validation.Identifier(a.Id); if (!string.IsNullOrEmpty(a.TaxId) && (a.TaxId.Length != 13 || !a.TaxId.All(char.IsAsciiDigit))) throw new ArgumentException("RUC invÃ¡lido."); if (string.IsNullOrWhiteSpace(a.Name) || a.Name.Length > 150 || s.Accounts.Any(x => x.Id == a.Id)) throw new ArgumentException("Nombre invÃ¡lido o cuenta existente."); s.Accounts.Add(a); return a; }));
 api.MapGet("/dashboard", (IStateRepository r, IStorageProvider storage, HttpContext c) => r.Read(s => DashboardData.Build(s, storage, TestView(c), c.Items["PanelRole"] as string == "admin" ? null : database.AssignedAccounts((string)c.Items["PanelUser"]!))));
 api.MapGet("/worker/status", (IStateRepository r) => r.Read(s => {
     var remote = string.Equals(Environment.GetEnvironmentVariable("SRI_REMOTE_EXECUTION_ENABLED"), "true", StringComparison.OrdinalIgnoreCase);
@@ -235,10 +237,10 @@ api.MapPost("/executions/{id}/cancel", (string id, IStateRepository r) => r.Upda
 api.MapPost("/executions/{id}/resume", (string id, IStateRepository r) => r.Update(s =>
 {
     var e = s.Executions.SingleOrDefault(e => e.Id == id) ?? throw new KeyNotFoundException();
-    if (e.Status != "RequiresHumanAction") throw new ArgumentException("No está suspendida.");
+    if (e.Status != "RequiresHumanAction") throw new ArgumentException("No estÃ¡ suspendida.");
     if (s.Executions.Any(x => x.Id != id && x.Query.Account == e.Query.Account && x.Status is "Pending" or "Running")) throw new ArgumentException("La cuenta ya tiene un trabajo activo.");
     e.Status = "Pending"; e.Stage = "Ready"; e.CancelRequested = false; e.Finished = null; e.Attempts = 0;
-    e.Message = "Reanudación solicitada desde el último checkpoint confirmado."; return e;
+    e.Message = "ReanudaciÃ³n solicitada desde el Ãºltimo checkpoint confirmado."; return e;
 }));
 api.MapPost("/executions/{id}/retry", (string id, IStateRepository r, HttpContext c) => r.Update(s =>
 {
@@ -270,7 +272,7 @@ api.MapPost("/sharepoint/uploads/{id}/retry", (string id, IStateRepository r, Ht
         var item = s.SharePointUploads.SingleOrDefault(u => u.Id == id) ?? throw new KeyNotFoundException();
         if (item.Status != "Failed") throw new ArgumentException("Solo se pueden reintentar publicaciones fallidas.");
         item.Status = "Pending"; item.NextAttempt = null; item.Error = null;
-        AuditTrail.Add(s, (string)c.Items["PanelUser"]!, "Publicación SharePoint", item.Account, $"Reintento solicitado: {item.RemotePath}");
+        AuditTrail.Add(s, (string)c.Items["PanelUser"]!, "PublicaciÃ³n SharePoint", item.Account, $"Reintento solicitado: {item.RemotePath}");
         return true;
     });
     return Results.Ok(new { queued = true });
@@ -292,13 +294,13 @@ api.MapGet("/documents/{id}/{extension}", async (string id, string extension, IS
 {
     var doc = r.Read(s => s.Documents.SingleOrDefault(d => d.Id == id) ?? throw new KeyNotFoundException());
     if (!Allowed(c, database, doc.Account)) return Results.StatusCode(403);
-    var path = extension switch { "xml" => doc.XmlPath, "pdf" => doc.PdfPath, _ => throw new ArgumentException("Extensión inválida.") } ?? throw new KeyNotFoundException("Archivo no disponible.");
+    var path = extension switch { "xml" => doc.XmlPath, "pdf" => doc.PdfPath, _ => throw new ArgumentException("ExtensiÃ³n invÃ¡lida.") } ?? throw new KeyNotFoundException("Archivo no disponible.");
     var remote = r.Read(s => s.SharePointUploads.FirstOrDefault(u => u.DocumentId == id && u.Extension == extension && u.Status == "Completed"));
     if (remote is not null)
     {
-        var graph = c.RequestServices.GetService<SharePointGraphClient>() ?? throw new IOException("SharePoint no está configurado.");
+        var graph = c.RequestServices.GetService<SharePointGraphClient>() ?? throw new IOException("SharePoint no estÃ¡ configurado.");
         var bytes = await graph.ReadIfExists(remote.RemotePath, cancellation) ?? throw new KeyNotFoundException("Archivo remoto no disponible.");
-        if (DownloadPipeline.Hash(bytes) != remote.Sha256) throw new InvalidDataException("El archivo remoto no supera la comprobación de integridad.");
+        if (DownloadPipeline.Hash(bytes) != remote.Sha256) throw new InvalidDataException("El archivo remoto no supera la comprobaciÃ³n de integridad.");
         return Results.File(bytes, extension == "xml" ? "application/xml" : "application/pdf", Path.GetFileName(path));
     }
     return Results.File(storage.Resolve(path), extension == "xml" ? "application/xml" : "application/pdf", Path.GetFileName(path));
@@ -306,7 +308,7 @@ api.MapGet("/documents/{id}/{extension}", async (string id, string extension, IS
 api.MapPost("/reports", (ReportRequest request, IStateRepository r, IStorageProvider storage,HttpContext c) =>
 {
     c.Items["AuditAccount"]=request.Account;
-    var from = new DateOnly(request.Year, request.Month, 1); var to = request.To ?? from; if (to < from || to.Year - from.Year > 20) throw new ArgumentException("Rango inválido.");
+    var from = new DateOnly(request.Year, request.Month, 1); var to = request.To ?? from; if (to < from || to.Year - from.Year > 20) throw new ArgumentException("Rango invÃ¡lido.");
     if (!r.Read(s => s.Accounts.Any(a => a.Id == request.Account))) throw new ArgumentException("Cuenta inexistente.");
     var documents = r.Read(s => s.Documents.Where(d => d.Account == request.Account).ToList()); var paths = new List<string>();
     foreach (var period in documents.Where(d => d.Issued >= from && d.Issued <= to.AddMonths(1).AddDays(-1)).Select(d => (d.Issued.Year, d.Issued.Month)).Distinct().OrderBy(x => x.Year).ThenBy(x => x.Month))
@@ -362,3 +364,4 @@ record ReportRequest(string Account, int Year, int Month, DateOnly? To);
 record AgentRegistration(string Label);
 record DeliveryConfirmation(string Sha256);
 record DeliveryFailure(string Code);
+
