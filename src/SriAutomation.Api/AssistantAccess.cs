@@ -16,6 +16,7 @@ public static class AssistantAccess
         var assigned=db.AssignedAccounts(user);
         bool Has(string? account)=>account is not null && assigned.Contains(account);
         if (p.Length == 1 && p[0] == "delivery-agents" && method is "POST" or "GET") return true;
+        if (p.Length == 3 && p[0] == "delivery-agents" && p[2] == "rotate" && method == "POST") return true;
         if (p.Length == 2 && p[0] == "delivery-agents" && method == "DELETE") return true;
         if (p.Length == 1 && p[0] == "delivery-queue" && method == "GET") return true;
         if (p.Length == 3 && p[0] == "delivery-queue" && method == "POST")

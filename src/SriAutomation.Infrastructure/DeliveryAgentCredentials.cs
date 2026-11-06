@@ -30,6 +30,19 @@ public sealed class DeliveryAgentCredentials(string connectionString)
         return (id, secret);
     }
 
+    public string? Rotate(Guid id, string username)
+    {
+        var bytes = RandomNumberGenerator.GetBytes(32);
+        try
+        {
+            using var db = new NpgsqlConnection(connectionString); db.Open();
+            using var cmd = new NpgsqlCommand("UPDATE delivery_agents SET secret_hash=@hash, last_seen_at=NULL WHERE id=@id AND lower(username)=lower(@username) AND revoked_at IS NULL", db);
+            cmd.Parameters.AddWithValue("id", id); cmd.Parameters.AddWithValue("username", username); cmd.Parameters.AddWithValue("hash", SHA256.HashData(bytes));
+            return cmd.ExecuteNonQuery() == 1 ? Convert.ToHexString(bytes) : null;
+        }
+        finally { CryptographicOperations.ZeroMemory(bytes); }
+    }
+
     public string? Authenticate(Guid id, string secret)
     {
         byte[] supplied;

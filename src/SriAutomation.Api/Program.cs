@@ -117,6 +117,13 @@ if (postgresConnection is not null)
         context.Response.Headers.CacheControl = "no-store";
         return Results.Ok(new { id = created.Id, secret = created.Secret });
     });
+    api.MapPost("/delivery-agents/{id:guid}/rotate", (Guid id, HttpContext context) =>
+    {
+        if (!context.Request.IsHttps) return Results.StatusCode(403);
+        context.Response.Headers.CacheControl = "no-store";
+        var secret = agentCredentials.Rotate(id, (string)context.Items["PanelUser"]!);
+        return secret is null ? Results.NotFound() : Results.Ok(new { id, secret });
+    });
     api.MapDelete("/delivery-agents/{id:guid}", (Guid id, HttpContext context) =>
         agentCredentials.Revoke(id, (string)context.Items["PanelUser"]!) ? Results.NoContent() : Results.NotFound());
     api.MapGet("/delivery-queue", (HttpContext context) => { context.Response.Headers.CacheControl = "no-store"; return Results.Ok(remoteDeliveries.Recent((string)context.Items["PanelUser"]!)); });
