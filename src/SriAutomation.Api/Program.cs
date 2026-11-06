@@ -12,16 +12,10 @@ using SriAutomation.Api;
 
 var builder = WebApplication.CreateBuilder(args.Where(arg => arg is not "--db-migrate" and not "--db-init").ToArray());
 var trustedProxies = (Environment.GetEnvironmentVariable("SRI_TRUSTED_PROXY_IPS") ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
-if (trustedProxies.Length > 0)
+var trustedNetworks = (Environment.GetEnvironmentVariable("SRI_TRUSTED_PROXY_NETWORKS") ?? "").Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+if (trustedProxies.Length > 0 || trustedNetworks.Length > 0)
 {
-    builder.Services.Configure<ForwardedHeadersOptions>(options =>
-    {
-        options.ForwardedHeaders = ForwardedHeaders.XForwardedProto | ForwardedHeaders.XForwardedFor;
-        options.KnownProxies.Clear();
-        options.KnownIPNetworks.Clear();
-        foreach (var proxy in trustedProxies) options.KnownProxies.Add(IPAddress.Parse(proxy));
-        options.ForwardLimit = 1;
-    });
+    builder.Services.Configure<ForwardedHeadersOptions>(options => TrustedProxyConfiguration.Configure(options, trustedProxies, trustedNetworks));
 }
 var postgresConnection = builder.Configuration.GetConnectionString("DefaultConnection");
 if (string.IsNullOrWhiteSpace(postgresConnection)) postgresConnection = null;
@@ -47,7 +41,7 @@ builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20_000_000);
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
 var app = builder.Build();
-if (trustedProxies.Length > 0) app.UseForwardedHeaders();
+if (trustedProxies.Length > 0 || trustedNetworks.Length > 0) app.UseForwardedHeaders();
 app.UseCors();
 var database = app.Services.GetRequiredService<IPanelDatabase>();
 if (postgresConnection is null) { database.Initialize(adminUsername!, password!); database.SyncAudit(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Audit.ToList())); database.SyncAccounts(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Accounts.ToList())); }
@@ -112,14 +106,14 @@ if (postgresConnection is not null)
     });
     api.MapPost("/delivery-agents", (AgentRegistration input, HttpContext context) =>
     {
-        if (!context.Request.IsHttps) return Results.StatusCode(403);
+        if (!context.Request.IsHttps) return Results.Problem("Se requiere HTTPS. Si usa un proxy inverso, configure su IP o red confiable y X-Forwarded-Proto.", statusCode: 403);
         var created = agentCredentials.Register((string)context.Items["PanelUser"]!, input.Label);
         context.Response.Headers.CacheControl = "no-store";
         return Results.Ok(new { id = created.Id, secret = created.Secret });
     });
     api.MapPost("/delivery-agents/{id:guid}/rotate", (Guid id, HttpContext context) =>
     {
-        if (!context.Request.IsHttps) return Results.StatusCode(403);
+        if (!context.Request.IsHttps) return Results.Problem("Se requiere HTTPS. Si usa un proxy inverso, configure su IP o red confiable y X-Forwarded-Proto.", statusCode: 403);
         context.Response.Headers.CacheControl = "no-store";
         var secret = agentCredentials.Rotate(id, (string)context.Items["PanelUser"]!);
         return secret is null ? Results.NotFound() : Results.Ok(new { id, secret });

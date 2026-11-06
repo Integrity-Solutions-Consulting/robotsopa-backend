@@ -66,6 +66,20 @@ public sealed class RemoteExecutionIntegrationTests
             var registered3 = credentials.Register("tester", "fixture 3");
             Assert.Equal("tester", credentials.Authenticate(registered.Id, registered.Secret));
             Assert.Null(credentials.Authenticate(registered.Id, new string('0', 64)));
+            Sql("INSERT INTO panel_users(username,role,salt,password_hash) VALUES ('other','asistente',decode('01020304','hex'),decode(repeat('02',32),'hex'))");
+            Assert.Empty(credentials.List("other"));
+            Assert.False(credentials.Revoke(registered.Id, "other"));
+            Assert.Null(credentials.Rotate(registered.Id, "other"));
+            Assert.Equal("tester", credentials.Authenticate(registered.Id, registered.Secret));
+            var rotated = credentials.Rotate(registered.Id, "tester");
+            Assert.NotNull(rotated);
+            Assert.Null(credentials.Authenticate(registered.Id, registered.Secret));
+            Assert.Equal("tester", credentials.Authenticate(registered.Id, rotated));
+            Assert.True(credentials.Revoke(registered.Id, "tester"));
+            Assert.Null(credentials.Authenticate(registered.Id, rotated));
+            Assert.Null(credentials.Rotate(registered.Id, "tester"));
+            registered = credentials.Register("tester", "fixture after revocation");
+
             var repo = new PostgresStateRepository(connection);
             var date = new DateOnly(2026, 9, 12); const string taxId = "1790000000001"; const string password = "FICTICIA-unica-7$";
             const string key = "0109202601179000000000110010010000000011234567811";
