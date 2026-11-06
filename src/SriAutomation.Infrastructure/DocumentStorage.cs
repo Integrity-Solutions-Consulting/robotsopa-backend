@@ -1,4 +1,6 @@
 using ClosedXML.Excel;
+using System.Globalization;
+using System.Text.RegularExpressions;
 using SriAutomation.Application;
 using SriAutomation.Domain;
 using UglyToad.PdfPig;
@@ -64,6 +66,18 @@ public sealed class DocumentStorage : IStorageProvider
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
         return relative;
     }
+    private static bool TryAuthorizationDate(string? value, out DateOnly date)
+    {
+        date = default;
+        if (string.IsNullOrWhiteSpace(value)) return false;
+        // Interpretar la fecha escrita en el comprobante sin convertirla a otra zona horaria.
+        var match = Regex.Match(value.Trim(), @"^(?<date>\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})(?:[T ](?<time>\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?)(?<zone>Z|[+-]\d{2}:\d{2})?)?$");
+        if (!match.Success || !DateOnly.TryParseExact(match.Groups["date"].Value, ["yyyy-MM-dd", "dd/MM/yyyy"], CultureInfo.InvariantCulture, DateTimeStyles.None, out date)) return false;
+        if (match.Groups["time"].Success && !TimeOnly.TryParseExact(match.Groups["time"].Value, ["HH:mm:ss", "HH:mm:ss.FFFFFFF"], CultureInfo.InvariantCulture, DateTimeStyles.None, out _)) return false;
+        var zone = match.Groups["zone"].Value;
+        if (zone.Length > 1 && (!int.TryParse(zone.AsSpan(1, 2), out var hours) || !int.TryParse(zone.AsSpan(4, 2), out var minutes) || hours > 14 || minutes > 59 || (hours == 14 && minutes != 0))) return false;
+        return true;
+    }
     public string Report(string account, int year, int month, IEnumerable<Voucher> documents)
     {
         _ = new DateOnly(year, month, 1);
@@ -80,14 +94,19 @@ public sealed class DocumentStorage : IStorageProvider
         foreach (var d in rows)
         {
             sheet.Cell(row, 1).Value = d.Type; sheet.Cell(row, 2).Value = d.Number;
-            sheet.Cell(row, 3).Value = d.Authorization; sheet.Cell(row, 4).Value = d.AuthorizedAt;
+            sheet.Cell(row, 3).Value = d.Authorization;
+            if (TryAuthorizationDate(d.AuthorizedAt, out var authorizationDate))
+                sheet.Cell(row, 4).Value = authorizationDate.ToDateTime(TimeOnly.MinValue);
+            else
+                System.Diagnostics.Trace.TraceWarning("Fecha de autorizaci?n ausente o inv?lida para comprobante {0}.", d.AccessKey);
             sheet.Cell(row, 5).Value = d.Recipient; sheet.Cell(row, 6).Value = d.Identification;
             if (d.Subtotal.HasValue) sheet.Cell(row, 7).Value = d.Subtotal.Value;
             if (d.Total.HasValue) sheet.Cell(row, 8).Value = d.Total.Value;
             row++;
         }
         sheet.Columns(7, 8).Style.NumberFormat.Format = "#,##0.00";
-        foreach (var column in new[] { 2, 3, 4, 6 }) sheet.Column(column).Style.NumberFormat.Format = "@";
+        sheet.Column(4).Style.NumberFormat.Format = "dd/MM/yyyy";
+        foreach (var column in new[] { 2, 3, 6 }) sheet.Column(column).Style.NumberFormat.Format = "@";
         var summary = book.AddWorksheet("Resumen");
         string[] summaryHeaders = ["Tipo", "Documentos", "Total del tipo", "Sin importe"];
         for (var i = 0; i < summaryHeaders.Length; i++) summary.Cell(1, i + 1).Value = summaryHeaders[i];
