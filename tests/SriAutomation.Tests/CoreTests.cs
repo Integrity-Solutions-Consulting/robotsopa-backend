@@ -30,6 +30,20 @@ public sealed class CoreTests : IDisposable
         Assert.Equal(11.50m, d.Total); Assert.Equal("0000123456789", d.Authorization); Assert.Equal("ValidadoXML", d.Status);
     }
     [Fact]
+    public void LegacyIndexedXmlIsUsedToRestoreReportDetails()
+    {
+        var xml = Fixture();
+        var document = new XmlDocumentParser().ParseXml(account, xml);
+        document.XmlPath = Storage.Save(document, "xml", xml);
+        document.XmlSha256 = DownloadPipeline.Hash(xml);
+        document.XmlData = null;
+        document.Total = null;
+        var path = Storage.Resolve(Storage.Report(account, 2026, 9, [document]));
+        using var book = new XLWorkbook(path);
+        Assert.Equal(11.50m, book.Worksheet("Facturas").Cell(2, 11).GetValue<decimal>());
+        Assert.Empty(XmlExcelComparator.Compare(xml, path));
+    }
+    [Fact]
     public void ParsesNamespacedEnvelopeAndDocument()
     {
         var xml = Encoding.UTF8.GetString(Fixture()).Replace("<autorizacion>", "<autorizacion xmlns=\"urn:authorization\">")

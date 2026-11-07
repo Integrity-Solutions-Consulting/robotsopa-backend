@@ -80,6 +80,7 @@ internal static class RemoteWorker
         try
         {
             var job = remote.Read(s => s.Executions.Single());
+            Console.WriteLine($"Trabajo asignado: {claim.JobId}.");
             var account = remote.Read(s => s.Accounts.Single()); var taxId = account.TaxId ?? account.Id;
             if (taxId.Length != 13 || !taxId.All(char.IsAsciiDigit)) throw new HumanActionRequiredException("RUC invÃ¡lido.");
             Console.WriteLine("Trabajo recibido. Iniciando acceso al portal oficial del SRI.");
@@ -119,6 +120,13 @@ internal static class RemoteWorker
             remote.Update(s => { ExecutionProgress.Set(s, job.Id, "OpeningQuery", "Abriendo la consulta SRI autorizada."); return true; });
             page = await AuthorizedQueryNavigation.Open(page, bound, taxId, work.Token, authenticate: p => remote.SubmitCredentials(p, taxId, work.Token), humanAction: p => WaitForHuman(p, remote, job.Id, work.Token));
             var profile = await ObservedPortalProfile.Discover(page, taxId, session: bound); profile.Validate();
+            profile.TraceStep = step =>
+            {
+                if (step.StartsWith("Resultado ", StringComparison.Ordinal) || step is "SubmittingQuery" or "QueryResponseConfirmed" or "DownloadXMLControlFound" or "DownloadPDFControlFound" or "DownloadXMLCompleted" or "DownloadPDFCompleted" or "DownloadXMLTimeout" or "DownloadPDFTimeout" or "DownloadXMLFailed" or "DownloadPDFFailed")
+                    Console.WriteLine($"Trabajo {claim.JobId}: {step}");
+                else if (step.StartsWith("DownloadXMLControlMissing", StringComparison.Ordinal) || step.StartsWith("DownloadPDFControlMissing", StringComparison.Ordinal))
+                    Console.WriteLine($"Trabajo {claim.JobId}: control de descarga {(step.StartsWith("DownloadXML", StringComparison.Ordinal) ? "XML" : "PDF")} no reconocido.");
+            };
             try
             {
                 for (var challengeAttempt = 0; ; challengeAttempt++)
@@ -153,6 +161,7 @@ internal static class RemoteWorker
         }
         catch (Exception ex) when (ex is HumanActionRequiredException or PortalRecognitionException or PlaywrightException or TimeoutException or IOException or HttpRequestException or InvalidOperationException)
         {
+            Console.Error.WriteLine($"Trabajo {claim.JobId}: {ex.GetType().Name}{(ex is HttpRequestException http && http.StatusCode.HasValue ? $" HTTP {(int)http.StatusCode.Value}" : "")}.");
             Console.Error.WriteLine("EjecuciÃ³n detenida; revise el historial y la ventana SRI.");
             try { using var result = await remote.PostAsync("stop", CancellationToken.None); } catch (Exception) { }
         }

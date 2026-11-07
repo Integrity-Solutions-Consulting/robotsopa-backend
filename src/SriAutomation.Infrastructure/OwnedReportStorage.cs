@@ -20,7 +20,7 @@ public sealed class OwnedReportStorage(IStorageProvider storage, OwnedContentSto
         try
         {
             var isolated = new DocumentStorage(workspace);
-            var report = isolated.Report(account, year, month, documents);
+            var report = isolated.Report(account, year, month, DocumentStorage.RestoreXmlData(storage, documents));
             var bytes = File.ReadAllBytes(isolated.Resolve(report));
             return content.Publish(bytes, "xlsx", (_, path, _) => path);
         }

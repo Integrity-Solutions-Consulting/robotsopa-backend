@@ -74,7 +74,7 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                             if (needPdf && pdf is null) transferIssues.Add("PDF no disponible; documento parcial.");
                             if (transferIssues.Count > 0)
                             {
-                                repository.Update(s => { var d = s.Documents.Single(d => d.Id == document.Id); d.Status = "Revisar"; d.Warning = string.Join(" ", d.Warning, string.Join(" ", transferIssues)); return true; });
+                                repository.Update(s => { var d = s.Documents.Single(d => d.Id == document.Id); d.Status = "Revisar"; d.Warning = string.Join(" ", d.Warning, string.Join(" ", transferIssues)); var e = s.Executions.Single(e => e.Id == execution.Id); e.Errors++; e.Issues.Add($"{date:yyyy-MM-dd} · {type} · fila {rowIndex + 1}: descarga parcial; revisar formatos solicitados."); return true; });
                                 errors++;
                             }
                             downloadedCount++;
@@ -97,11 +97,12 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                 {
                     var e = s.Executions.Single(e => e.Id == execution.Id);
                     e.Queries.RemoveAll(q => q.Date == date && q.Type == type);
-                    e.Queries.Add(new(date, type, count, downloadedCount, errors, count == 0 ? "SinDocumentos" : errors == 0 ? "Consultado" : "ConErrores"));
+                    e.Queries.Add(new(date, type, count, downloadedCount, errors, errors > 0 ? "ConErrores" : count == 0 ? "SinDocumentos" : "Consultado"));
                     e.Found = e.Queries.Sum(q => q.Found);
                     e.Message = count == 0 ? "Fecha consultada sin comprobantes." : "Consulta procesada; archivos disponibles registrados.";
                     return true;
                 });
+                profile.TraceStep?.Invoke($"Resultado {date:yyyy-MM-dd} {type}: detectados={count} descargados={downloadedCount} errores={errors}");
                 void Progress(string status) => repository.Update(s =>
                 {
                     var e = s.Executions.Single(e => e.Id == execution.Id);

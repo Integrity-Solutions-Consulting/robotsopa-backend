@@ -84,7 +84,7 @@ public sealed class DocumentStorage : IStorageProvider
         var directory = Resolve(Path.Combine(year.ToString("D4"), ".report-" + Validation.Identifier(account)));
         Directory.CreateDirectory(Path.GetDirectoryName(directory)!);
         using var gate = new FileStream(directory + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
-        var rows = documents.Where(d => d.Account == account && d.Issued.Year == year && d.Issued.Month == month)
+        var rows = RestoreXmlData(this, documents.Where(d => d.Account == account && d.Issued.Year == year && d.Issued.Month == month))
             .DistinctBy(d => (d.Type, d.AccessKey)).OrderBy(d => d.Issued).ThenBy(d => d.Number).ToList();
         using var book = new XLWorkbook();
         var sheet = book.AddWorksheet("Documentos");
@@ -186,6 +186,26 @@ public sealed class DocumentStorage : IStorageProvider
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
         return relative;
+    }
+
+    internal static IEnumerable<Voucher> RestoreXmlData(IStorageProvider storage, IEnumerable<Voucher> documents)
+    {
+        foreach (var document in documents)
+        {
+            if (document.XmlData is not null || document.XmlPath is null) { yield return document; continue; }
+            var path = storage.Resolve(document.XmlPath);
+            if (!File.Exists(path)) { yield return document; continue; }
+            var bytes = File.ReadAllBytes(path);
+            if (document.XmlSha256 is not null && DownloadPipeline.Hash(bytes) != document.XmlSha256)
+                throw new InvalidDataException("El XML almacenado no coincide con su huella.");
+            var parsed = new XmlDocumentParser().ParseXml(document.Account, bytes);
+            if (parsed.AccessKey != document.AccessKey || parsed.Type != document.Type || parsed.Issued != document.Issued)
+                throw new InvalidDataException("El XML almacenado no coincide con el documento indexado.");
+            parsed.Id = document.Id; parsed.Source = document.Source;
+            parsed.XmlPath = document.XmlPath; parsed.XmlSha256 = document.XmlSha256;
+            parsed.PdfPath = document.PdfPath; parsed.PdfSha256 = document.PdfSha256;
+            yield return parsed;
+        }
     }
 
     private static void AddXmlDetailSheets(XLWorkbook book, List<Voucher> documents)
