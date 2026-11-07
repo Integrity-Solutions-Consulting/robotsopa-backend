@@ -1,5 +1,5 @@
 ﻿#define MyAppName "Bot"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.0"
 [Setup]
 AppId={{B2411B51-2C2D-47B1-887A-495C8974E3C5}
 AppName={#MyAppName}
@@ -7,17 +7,15 @@ AppVersion={#MyAppVersion}
 DefaultDirName={autopf}\Bot
 DefaultGroupName=Bot
 OutputDir=output
-OutputBaseFilename=Bot-Setup-{#MyAppVersion}
+OutputBaseFilename=Bot-Setup
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
-CloseApplications=yes
-RestartApplications=no
 UninstallDisplayIcon={app}\Bot.exe
 [Files]
-Source: "publish\{#MyAppVersion}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
 Name: "{autoprograms}\Bot"; Filename: "{app}\Bot.exe"
 Name: "{autodesktop}\Bot"; Filename: "{app}\Bot.exe"; Tasks: desktopicon

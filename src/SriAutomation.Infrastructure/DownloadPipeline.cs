@@ -16,8 +16,6 @@ public sealed class DownloadPipeline(IStateRepository repository, IStorageProvid
     }
     public Voucher Process(DownloadedVoucher download)
     {
-        if (download.Xml is { Length: 0 or > 20_000_000 } || download.Pdf is { Length: 0 or > 20_000_000 })
-            throw new DocumentSizeException();
         if (repository is OwnedStateRepository && ownedContent is null) throw new InvalidOperationException("La ejecución distribuida requiere publicación protegida.");
         if (ownedContent is not null && !ownedContent.Uses(repository)) throw new InvalidOperationException("La publicación requiere el repositorio propietario asociado.");
         var account = repository.Read(s => s.Accounts.SingleOrDefault(a => a.Id == download.Account)) ?? throw new ArgumentException("Cuenta no registrada.");

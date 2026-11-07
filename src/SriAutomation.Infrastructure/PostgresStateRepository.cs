@@ -65,7 +65,7 @@ public sealed class PostgresStateRepository(string connectionString) : IStateRep
         var accountsBefore = state.Accounts.ToList();
         using var check = new NpgsqlCommand("SELECT 1 FROM execution_ownership WHERE job_id=@job AND worker_id=@worker AND lease_id=@lease AND fencing_token=@token AND coordination_state='leased' AND lease_expires_at>clock_timestamp() FOR UPDATE", connection, transaction);
         check.Parameters.AddWithValue("job", ownership.JobId); check.Parameters.AddWithValue("worker", ownership.WorkerId); check.Parameters.AddWithValue("lease", ownership.LeaseId); check.Parameters.AddWithValue("token", ownership.FencingToken);
-        if (check.ExecuteScalar() is null) throw new ExecutionLeaseException();
+        if (check.ExecuteScalar() is null) throw new InvalidOperationException("Execution ownership has expired or changed.");
         var otherJobs = state.Executions.Where(e => e.Id != ownership.JobId).ToDictionary(e => e.Id, e => JsonSerializer.Serialize(e, Options));
         var ownedBefore = state.Executions.SingleOrDefault(e => e.Id == ownership.JobId) ?? throw new InvalidOperationException("Execution is missing.");
         var cancellationRequested = ownedBefore.CancelRequested;
@@ -81,9 +81,9 @@ public sealed class PostgresStateRepository(string connectionString) : IStateRep
         using var update = new NpgsqlCommand("UPDATE app_state SET payload=@payload::jsonb WHERE id=1", connection, transaction);
         update.Parameters.AddWithValue("payload", NpgsqlDbType.Text, JsonSerializer.Serialize(state, Options));
         if (update.ExecuteNonQuery() != 1) throw new InvalidOperationException("PostgreSQL state row is missing.");
-        if (check.ExecuteScalar() is null) throw new ExecutionLeaseException();
+        if (check.ExecuteScalar() is null) throw new InvalidOperationException("Execution ownership expired during the update.");
         EnqueueOwnedFiles(connection, transaction, state, ownedAfter);
-        if (check.ExecuteScalar() is null) throw new ExecutionLeaseException();
+        if (check.ExecuteScalar() is null) throw new InvalidOperationException("Execution ownership expired while queueing deliveries.");
         transaction.Commit(); return result;
     }
 

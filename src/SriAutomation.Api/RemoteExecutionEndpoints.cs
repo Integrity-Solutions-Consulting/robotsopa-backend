@@ -104,23 +104,10 @@ public static class RemoteExecutionEndpoints
         {
             if (Identity(c) is null) return Results.Unauthorized();
             var owner = Owner(c, id); var scoped = new OwnedStateRepository(repository, owner);
-            try
-            {
             scoped.Update(s => { var job = s.Executions.Single(e => e.Id == id);
-                if (job.Status != "Running" || job.CancelRequested || file.Account != job.Query.Account || file.Issued < job.Query.From || file.Issued > job.Query.To || !job.Query.Types.Contains(file.Type) || !job.AttemptedKeys.Contains(file.Key)) throw new RemoteFileScopeException();
+                if (job.Status != "Running" || job.CancelRequested || file.Account != job.Query.Account || file.Issued < job.Query.From || file.Issued > job.Query.To || !job.Query.Types.Contains(file.Type) || !job.AttemptedKeys.Contains(file.Key)) throw new ArgumentException("Archivo fuera del trabajo autorizado.");
                 return true; });
-            var result = new DownloadPipeline(scoped, storage, parser, new OwnedContentStore(storage, scoped, owner)).Process(file);
-            try { scoped.Update(s => { var job = s.Executions.Single(e => e.Id == id); if (job.Events.LastOrDefault()?.Stage == "RemoteFileError") job.Events.Add(new(DateTimeOffset.UtcNow, "RemoteFileAccepted", "Archivo aceptado.")); return true; }); }
-            catch (Exception) { /* The file was already committed; do not turn its acknowledgement into a failure. */ }
-            return Results.Ok(result);
-            }
-            catch (Exception ex) when (ex is not ExecutionLeaseException)
-            {
-                var code = ex is IOException or UnauthorizedAccessException ? "STORAGE_UNAVAILABLE" : ex is ArgumentException or InvalidDataException or System.Xml.XmlException ? "DOCUMENT_OR_REQUEST_INVALID" : "INTERNAL_ERROR";
-                try { scoped.Update(s => { var job = s.Executions.Single(e => e.Id == id); job.Events.Add(new(DateTimeOffset.UtcNow, "RemoteFileError", $"{owner.FencingToken}:{code}")); if (job.Events.Count > 100) job.Events.RemoveAt(0); return true; }); }
-                catch (Exception) { /* Preserve the original error if the lease or database is unavailable. */ }
-                throw;
-            }
+            return Results.Ok(new DownloadPipeline(scoped, storage, parser, new OwnedContentStore(storage, scoped, owner)).Process(file));
         });
         group.MapPost("/{id}/finish", async (HttpContext c, string id, IStorageProvider storage) =>
         {
@@ -138,8 +125,6 @@ public static class RemoteExecutionEndpoints
             if (Identity(c) is null) return Results.Unauthorized();
             var owner = Owner(c, id);
             var challenge = c.Request.Headers["X-Stop-Reason"] == "HumanChallenge";
-            var fileFailure = repository.UpdateOwned(owner, s => { var job = s.Executions.Single(e => e.Id == id); if (job.Status != "Running") return true; var last = job.Events.LastOrDefault(); if (!challenge && !job.CancelRequested && last?.Stage == "RemoteFileError" && last.Message.StartsWith($"{owner.FencingToken}:", StringComparison.Ordinal)) { job.Status = "Failed"; job.Errors++; job.Finished = DateTimeOffset.UtcNow; ExecutionProgress.Set(s, id, "Failed", "La API rechazó o no pudo almacenar el documento. Revise los registros del backend y reintente desde Historial."); AuditTrail.Add(s, job.RequestedBy ?? "Agente", "Resultado de procesamiento", job.Query.Account, job.Status); return true; } return false; });
-            if (fileFailure) { coordinator.Release(owner); return Results.Ok(); }
             repository.UpdateOwned(owner, s => { var job = s.Executions.Single(e => e.Id == id); job.Status = job.CancelRequested ? "Cancelled" : "RequiresHumanAction"; job.Stage = job.Status; job.Finished = DateTimeOffset.UtcNow; ExecutionProgress.Set(s, id, job.Status, job.CancelRequested ? "Cancelada por el usuario." : challenge ? "El SRI solicita CAPTCHA o MFA. Complete la verificación autorizada y reanude el trabajo." : "La ejecución se detuvo y requiere intervención en Windows."); AuditTrail.Add(s, job.RequestedBy ?? "Agente", "Resultado de procesamiento", job.Query.Account, job.Status); return true; });
             coordinator.Release(owner); return Results.Ok();
         });
@@ -149,5 +134,3 @@ public static class RemoteExecutionEndpoints
         public Task Execute(Query query, CancellationToken cancellation) => Task.CompletedTask;
     }
 }
-
-public sealed class RemoteFileScopeException() : ArgumentException("Archivo fuera del trabajo autorizado.");

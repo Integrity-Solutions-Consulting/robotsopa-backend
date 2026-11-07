@@ -20,8 +20,7 @@ public sealed class MonthlyReportContractTests
             var sheet = workbook.Worksheet("Documentos");
             Assert.Equal(2, sheet.LastRowUsed()!.RowNumber());
             Assert.Equal("Fecha y hora de autorización", sheet.Cell(1, 4).GetString());
-            Assert.Equal(new DateTime(2025, 2, 2), sheet.Cell(2, 4).GetDateTime());
-            Assert.Equal("dd/MM/yyyy", sheet.Cell(2, 4).Style.NumberFormat.Format);
+            Assert.Equal(selected.AuthorizedAt, sheet.Cell(2, 4).GetString());
             Assert.Equal(12.5m, sheet.Cell(2, 8).GetValue<decimal>());
         }
         finally { if (Directory.Exists(directory)) Directory.Delete(directory, true); }

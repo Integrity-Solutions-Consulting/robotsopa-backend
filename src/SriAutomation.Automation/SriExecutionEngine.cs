@@ -61,21 +61,20 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                             if (e.AttemptedKeys.Contains(row.Key)) return true;
                             e.AttemptedKeys.Add(row.Key); return true;
                         });
-                        var transferIssues = new List<string>();
                         try
                         {
                             byte[]? xml = null, pdf = null;
                             Stage("Downloading");
+                            var transferIssues = new List<string>();
                             if (needXml) try { xml = await portal.Download(row, "xml", cancellation); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga XML fallida."); }
                             if (needPdf) try { pdf = await portal.Download(row, "pdf", cancellation); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga PDF fallida."); }
-                            if (needXml && xml is null) transferIssues.Add("XML no disponible.");
-                            if (needPdf && pdf is null) transferIssues.Add("PDF no disponible.");
-                            if (xml is null && pdf is null) throw new InvalidDataException("DOWNLOAD_NO_FILE");
                             Stage("Processing");
                             var document = downloads.Process(new(query.Account, type, row.Key, row.Issued, xml, pdf));
+                            if (needXml && xml is null) transferIssues.Add("XML no disponible; documento parcial.");
+                            if (needPdf && pdf is null) transferIssues.Add("PDF no disponible; documento parcial.");
                             if (transferIssues.Count > 0)
                             {
-                                repository.Update(s => { var d = s.Documents.Single(d => d.Id == document.Id); d.Status = "Revisar"; d.Warning = string.Join(" ", d.Warning, string.Join(" ", transferIssues)); var e = s.Executions.Single(e => e.Id == execution.Id); e.Errors++; e.Issues.Add($"{date:yyyy-MM-dd} · {type} · fila {rowIndex + 1}: La descarga no se completó."); ExecutionProgress.Set(s, execution.Id, "Processing", "La descarga no se completó."); return true; });
+                                repository.Update(s => { var d = s.Documents.Single(d => d.Id == document.Id); d.Status = "Revisar"; d.Warning = string.Join(" ", d.Warning, string.Join(" ", transferIssues)); return true; });
                                 errors++;
                             }
                             downloadedCount++;
@@ -84,8 +83,7 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                         catch (Exception ex) when (ex is ArgumentException or InvalidDataException or System.Xml.XmlException)
                         {
                             errors++;
-                            var reason = ex.Message == "DOWNLOAD_NO_FILE" ? (transferIssues.Any(x => x.Contains("fallida", StringComparison.Ordinal)) ? "La descarga no se completó." : "No se encontró un control de descarga disponible.") : ex.Message == "Hay varias descargas del mismo formato en la fila." ? "Se encontraron controles de descarga ambiguos." : "El archivo no superó la validación.";
-                            repository.Update(s => { var e = s.Executions.Single(e => e.Id == execution.Id); e.Errors++; e.Issues.Add($"{date:yyyy-MM-dd} · {type} · fila {rowIndex + 1}: {reason}"); ExecutionProgress.Set(s, execution.Id, "Processing", reason); return true; });
+                            repository.Update(s => { var e = s.Executions.Single(e => e.Id == execution.Id); e.Errors++; e.Issues.Add($"{date:yyyy-MM-dd} · {type} · fila {rowIndex + 1}: archivo ausente, inválido o no coincidente; revisar y reintentar."); return true; });
                             if (existing is not null) repository.Update(s => { var d = s.Documents.Single(d => d.Id == existing.Id); d.Status = "Revisar"; d.Warning = "No se pudo confirmar la integridad de los archivos solicitados. Se conservó el contenido existente."; return true; });
                         }
                         SaveCheckpoint(new(date, type, pageNumber, rowIndex + 1));

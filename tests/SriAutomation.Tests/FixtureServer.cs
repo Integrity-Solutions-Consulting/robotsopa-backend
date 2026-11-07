@@ -28,11 +28,6 @@ public sealed class FixtureServer : IAsyncDisposable
             Interlocked.Increment(ref server.Files); var key = Path.GetFileNameWithoutExtension(filename); var xml = filename.EndsWith(".xml");
             return Results.File(xml ? PhaseTwoTests.Xml(key) : PdfFixture.BuildLines(["CLAVE DE ACCESO: " + key]), xml ? "application/xml" : "application/pdf", filename);
         });
-        app.MapGet("/download/{key}/{format:int}", (string key, int format) =>
-        {
-            Interlocked.Increment(ref server.Files); var xml = format == 0;
-            return Results.File(xml ? PhaseTwoTests.Xml(key) : PdfFixture.BuildLines(["CLAVE DE ACCESO: " + key]), xml ? "application/xml" : "application/pdf", xml ? "fixture.xml" : "fixture.pdf");
-        });
         await app.StartAsync(); return server;
     }
     public async ValueTask DisposeAsync() { await app.StopAsync(); await app.DisposeAsync(); }

@@ -76,13 +76,6 @@ app.Use(async (context, next) =>
     catch (Exception ex) { app.Logger.LogError("Error interno de tipo {Type}", ex.GetType().Name); await Results.Problem("Error interno.", statusCode: 500).ExecuteAsync(context); }
     finally { AuditEndpoints.RecordRequest(context, app.Services.GetRequiredService<IStateRepository>()); }
 });
-Func<HttpContext, bool>? remoteUploadAuthorized = null;
-app.Use((context, next) => RemoteExecutionTransport.Invoke(context, async c =>
-{
-    // Authenticate before model binding allocates a potentially large body.
-    if (RemoteExecutionTransport.IsFileUpload(c.Request) && remoteUploadAuthorized is not null && !remoteUploadAuthorized(c)) { c.Response.StatusCode = 401; return; }
-    await next(c);
-}, app.Logger));
 app.UseRateLimiter(); if (app.Environment.IsDevelopment()) { app.UseSwagger(); app.UseSwaggerUI(); } app.MapHealthChecks("/health");
 app.MapGet("/health/ready", () => { try { if (postgresConnection is null) return Results.StatusCode(503); PostgresAdministration.Verify(postgresConnection); return Results.Ok(); } catch { return Results.StatusCode(503); } });
 if (postgresConnection is not null)
@@ -159,7 +152,6 @@ if (postgresConnection is not null)
         return user;
     }
     var remoteExecutionEnabled = string.Equals(Environment.GetEnvironmentVariable("SRI_REMOTE_EXECUTION_ENABLED"), "true", StringComparison.OrdinalIgnoreCase);
-    if (remoteExecutionEnabled) remoteUploadAuthorized = c => AgentUser(c) is not null;
     RemoteAgentStatus.Map(app, AgentUser, remoteExecutionEnabled);
     if (remoteExecutionEnabled)
         RemoteExecutionEndpoints.Map(app, postgresConnection, AgentUser, agentCredentials.CanAccess);

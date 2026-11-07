@@ -9,54 +9,6 @@ namespace SriAutomation.Tests;
 
 public sealed class SriEngineFixtureTests
 {
-    [BrowserFact]
-    public async Task MissingDownloadControlsAreReportedPerRowWithoutSendingEmptyFiles()
-    {
-        var root = Path.Combine(Path.GetTempPath(), "sri-missing-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
-        try
-        {
-            var repository = new JsonStateRepository(root);
-            var query = new Query("a", new(2026, 9, 12), new(2026, 9, 12), ["Facturas"]);
-            var job = repository.Update(s => { s.Accounts.Add(new("a", "Fixture", "1790000000001", true)); return Validation.Enqueue(s, query); });
-            await using var server = await FixtureServer.Start(Html.Replace("class=\"pdf\"", "class=\"unavailable\""));
-            using var playwright = await Playwright.CreateAsync(); await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
-            var page = await browser.NewPageAsync(); await page.GotoAsync(server.Url);
-            var pipeline = new CountingPipeline(); var profile = Profile(); profile.Url = server.Url;
-            await new SriExecutionEngine(repository, pipeline).Run(page, profile, job, "1790000000001", CancellationToken.None);
-            var result = repository.Read(s => s.Executions.Single());
-            Assert.Equal(2, result.Found); Assert.Equal(0, result.Downloaded); Assert.Equal(2, result.Errors);
-            Assert.Equal(0, pipeline.Calls); Assert.Equal(0, server.Files);
-            Assert.All(result.Issues, issue => Assert.Contains("No se encontró un control", issue));
-        }
-        finally { Directory.Delete(root, true); }
-    }
-    private sealed class CountingPipeline : IDownloadPipeline
-    {
-        public int Calls { get; private set; }
-        public Voucher Process(DownloadedVoucher input) { Calls++; throw new InvalidOperationException("No se esperaba el envío."); }
-    }
-    [BrowserFact]
-    public async Task PartialDownloadsAreCountedAndReportedWhileAvailablePdfIsStored()
-    {
-        var root = Path.Combine(Path.GetTempPath(), "sri-partial-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
-        try
-        {
-            var repository = new JsonStateRepository(Path.Combine(root, "state"));
-            var storage = new DocumentStorage(Path.Combine(root, "documents"));
-            var query = new Query("a", new(2026, 9, 12), new(2026, 9, 12), ["Facturas"], Pdf: true, Xml: true);
-            var job = repository.Update(s => { s.Accounts.Add(new("a", "Fixture", "1790000000001", true)); var e = new Execution { Query = query }; s.Executions.Add(e); return e; });
-            await using var server = await FixtureServer.Start(Html.Replace("class=\"xml\"", "class=\"unavailable\""));
-            using var playwright = await Playwright.CreateAsync(); await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
-            var page = await browser.NewPageAsync(); await page.GotoAsync(server.Url);
-            var profile = Profile(); profile.Url = server.Url;
-            await new SriExecutionEngine(repository, new DownloadPipeline(repository, storage, new XmlDocumentParser())).Run(page, profile, job, "1790000000001", CancellationToken.None);
-            var result = repository.Read(s => s.Executions.Single());
-            Assert.Equal(2, result.Downloaded); Assert.Equal(2, result.Errors); Assert.Equal(2, server.Files);
-            Assert.All(result.Issues, issue => Assert.Contains("La descarga no se completó", issue));
-            Assert.All(repository.Read(s => s.Documents), d => { Assert.NotNull(d.PdfPath); Assert.Null(d.XmlPath); });
-        }
-        finally { Directory.Delete(root, true); }
-    }
     internal const string Html = """
         <!doctype html><html><body><div id="authenticated">Sesión fixture</div><span id="account">1790000000001</span><div id="login" hidden>Login fixture</div><div id="challenge" hidden>Verificación fixture</div>
         <input id="date"><select id="type"><option value="01">Factura</option></select><button id="search" onclick="current=0;load()">Consultar</button>
