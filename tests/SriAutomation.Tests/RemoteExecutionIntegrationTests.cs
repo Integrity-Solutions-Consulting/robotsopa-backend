@@ -89,6 +89,7 @@ public sealed class RemoteExecutionIntegrationTests
             builder.Services.AddSingleton<IStateRepository>(repo);
             await using var app = builder.Build();
             app.Use(async (c, next) => { if (c.Request.Headers["X-Test-Https"] == "1") c.Request.Scheme = "https"; await next(); });
+            app.Use((c, next) => RemoteExecutionTransport.Invoke(c, next, app.Logger));
             app.MapPanelEndpoints(app.MapGroup("/api/v1"), new PostgresPanelDatabase(connection));
             app.MapGet("/api/v1/reports/{account}/{year:int}/{month:int}", MonthlyReportEndpoint.Download);
             RemoteExecutionEndpoints.Map(app, connection, c => Guid.TryParse(c.Request.Headers["X-Delivery-Agent-Id"], out var agent) ? credentials.Authenticate(agent, c.Request.Headers["X-Delivery-Agent-Secret"].ToString()) : null, credentials.CanAccess);
@@ -122,6 +123,7 @@ public sealed class RemoteExecutionIntegrationTests
             var current = await recovered.Content.ReadFromJsonAsync<Claim>(); Assert.True(current!.Generation > old!.Generation); Headers(loser, current);
             using (var stale = await winner.PostAsync("/execution-agent/v1/job/renew", null)) Assert.Equal(HttpStatusCode.Conflict, stale.StatusCode);
             using (var staleRead = await winner.GetAsync("/execution-agent/v1/job/state")) Assert.False(staleRead.IsSuccessStatusCode);
+            using (var staleFile = await winner.PostAsJsonAsync("/execution-agent/v1/job/files", new DownloadedVoucher(account, "Facturas", key, date, null, new byte[] { 1 }))) Assert.Equal(HttpStatusCode.Conflict, staleFile.StatusCode);
             using (var staleCredential = await winner.PostAsync("/execution-agent/v1/job/credentials", null)) Assert.False(staleCredential.IsSuccessStatusCode);
             var identity = loser == first ? registered : registered2;
             Assert.True(credentials.Revoke(identity.Id, "tester"));
@@ -174,9 +176,12 @@ public sealed class RemoteExecutionIntegrationTests
             }
             remote.Update(s => { s.Executions.Single().AttemptedKeys.Add(key); return true; });
             var pdf = PdfFixture.BuildLines(["CLAVE DE ACCESO: " + key]);
-            var file = new DownloadedVoucher(account, "Facturas", key, date, null, pdf);
+            var file = new DownloadedVoucher(account, "Facturas", key, date, PhaseTwoTests.Xml(key), pdf);
             var uploaded = remote.Process(file); var duplicate = remote.Process(file); Assert.Equal(uploaded.Id, duplicate.Id);
             Assert.Single(repo.Read(s => s.Documents));
+            var stored = repo.Read(s => s.Documents.Single());
+            Assert.True(File.Exists(serverStorage.Resolve(stored.XmlPath!)));
+            Assert.True(File.Exists(serverStorage.Resolve(stored.PdfPath!)));
             await using (var portal = await FixtureServer.Start(SriEngineFixtureTests.Html))
             using (var playwright = await Playwright.CreateAsync())
             await using (var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true }))
@@ -227,6 +232,15 @@ public sealed class RemoteExecutionIntegrationTests
             Assert.Single(repo.Read(s => s.Executions.Single(e => e.Id == "empty").Reports));
             await DeliveryAgent.PollOnce(transport, desktop, deliveryLock, CancellationToken.None);
             Assert.True(File.Exists(Path.Combine(desktop, taxId, "2025", "01", "Reportes", "Resumen_2025_01.xlsx")));
+            repo.Update(s => { s.Executions.Add(new() { Id = "failed-file", RequestedBy = "tester", Query = new(account, date, date, ["Facturas"]) }); return true; });
+            using var failureClaimResponse = await third.PostAsync("/execution-agent/v1/claim", null);
+            var failureClaim = (await failureClaimResponse.Content.ReadFromJsonAsync<Claim>())!;
+            var failedRemote = new RemoteOwnedExecution(transport, new RemoteWorker.Claim(failureClaim.JobId, failureClaim.LeaseId, failureClaim.Generation));
+            failedRemote.Update(s => { s.Executions.Single().AttemptedKeys.Add(key); return true; });
+            using var failureClient = Client(address, registered3.Id, registered3.Secret); Headers(failureClient, failureClaim);
+            using (var rejected = await failureClient.PostAsJsonAsync("/execution-agent/v1/failed-file/files", new DownloadedVoucher(account, "Facturas", key, date, [1, 2, 3], null))) Assert.Equal(HttpStatusCode.BadRequest, rejected.StatusCode);
+            using (var stop = await failedRemote.PostAsync("stop", CancellationToken.None)) Assert.Equal(HttpStatusCode.OK, stop.StatusCode);
+            Assert.Equal("Failed", repo.Read(s => s.Executions.Single(e => e.Id == "failed-file").Status));
             Assert.True(credentials.Revoke(registered3.Id, "tester")); Assert.Null(credentials.Authenticate(registered3.Id, registered3.Secret));
             using (var revoked = await third.PostAsync("/execution-agent/v1/claim", null)) Assert.Equal(HttpStatusCode.Unauthorized, revoked.StatusCode);
             await app.StopAsync();

@@ -1,5 +1,13 @@
 # API independiente en Dokploy (Dockerfile)
 
+## Límite HTTP de documentos del agente
+
+La API admite como máximo 54.000.000 bytes para `POST /execution-agent/v1/{jobId}/files`: dos archivos de hasta 20.000.000 bytes cada uno, codificados en Base64, más metadatos JSON. Los demás endpoints conservan el límite de 20.000.000 bytes. El límite individual no sustituye las validaciones de XML, PDF ni de propiedad del trabajo.
+
+El Nginx del frontend de este repositorio sirve archivos estáticos y no actúa como proxy de esa ruta. Si existe un proxy externo delante de la API con límite de cuerpo, debe admitir al menos 54.000.000 bytes para esa ruta; por ejemplo, en Nginx `client_max_body_size 54m` es suficiente. Si rechaza antes de llegar a la API, el HTTP 413 aparece en el proxy y no en el registro de la API. No se ha comprobado desde este repositorio el límite efectivo del proxy de producción.
+
+Los rechazos de la API se registran con operación, HTTP y un código sin contenido de documentos, credenciales, identificadores ni datos personales. `LEASE_EXPIRED_OR_CHANGED` indica pérdida de propiedad; `FILE_SIZE_INVALID`, tamaño individual; `REQUEST_TOO_LARGE`, cuerpo excesivo; `FILE_OUTSIDE_AUTHORIZED_JOB`, alcance no autorizado; `XML_INVALID` o `DOCUMENT_OR_REQUEST_INVALID`, validación; y `STORAGE_UNAVAILABLE`, fallo de almacenamiento. Un rechazo del proxy, una desconexión o un error previo a la lectura del cuerpo pueden impedir que la API reciba el detalle.
+
 Estado: preparación parcial; no se ha verificado el despliegue ni la automatización SRI. Antes de producción valide los permisos, las pruebas y las limitaciones indicadas abajo.
 
 ## Panel de Dokploy
