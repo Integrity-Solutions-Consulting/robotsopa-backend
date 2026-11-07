@@ -19,7 +19,7 @@ public sealed class MonthlyReportContractTests
             using var workbook = new XLWorkbook(storage.Resolve(path));
             var sheet = workbook.Worksheet("Documentos");
             Assert.Equal(2, sheet.LastRowUsed()!.RowNumber());
-            Assert.Equal("Fecha y hora de autorización", sheet.Cell(1, 4).GetString());
+            Assert.Equal("Fecha de autorización", sheet.Cell(1, 4).GetString());
             Assert.Equal(new DateTime(2025, 2, 2), sheet.Cell(2, 4).GetDateTime());
             Assert.Equal("dd/MM/yyyy", sheet.Cell(2, 4).Style.NumberFormat.Format);
             Assert.Equal(12.5m, sheet.Cell(2, 8).GetValue<decimal>());

@@ -42,7 +42,12 @@ public sealed class EndToEndTests
         }
         Assert.Equal("Completed", job.Status); Assert.Equal(1, job.Processed);
         var report = await client.GetAsync($"/api/v1/reports/{id}/2026/9"); Assert.True(report.IsSuccessStatusCode);
-        using (var book = new XLWorkbook(new MemoryStream(await report.Content.ReadAsByteArrayAsync()))) { Assert.Equal(3, book.Worksheets.Count); Assert.Equal("0012345678", book.Worksheet("Documentos").Cell(2, 5).GetString()); }
+        using (var book = new XLWorkbook(new MemoryStream(await report.Content.ReadAsByteArrayAsync())))
+        {
+            Assert.Equal("0012345678", book.Worksheet("Documentos").Cell(2, 6).GetString());
+            Assert.Equal(new DateTime(2026, 9, 12), book.Worksheet("Documentos").Cell(2, 9).GetDateTime());
+            Assert.Equal(11.50m, book.Worksheet("Facturas").Cell(2, 11).GetValue<decimal>());
+        }
         Assert.True((await client.GetAsync($"/api/v1/documents/{document.Id}/xml")).IsSuccessStatusCode);
         Assert.True((await client.GetAsync($"/api/v1/documents/{document.Id}/pdf")).IsSuccessStatusCode);
         var sriJobResponse = await client.PostAsJsonAsync("/api/v1/executions", query with { Mode = "Sri" }); Assert.True(sriJobResponse.IsSuccessStatusCode);

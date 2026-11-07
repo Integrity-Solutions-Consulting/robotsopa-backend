@@ -24,10 +24,12 @@ public sealed class DocumentIndexer(IStateRepository repository, IStorageProvide
                 var isCurrent = parts.Length >= 4 + accountParts.Length && parts.Skip(2).Take(accountParts.Length).SequenceEqual(accountParts);
                 var isLegacy = parts.Length >= accountParts.Length + 4 && parts.Take(accountParts.Length).SequenceEqual(accountParts);
                 if (!isCurrent && !isLegacy) continue;
-                var doc = parser.ParseXml(account, File.ReadAllBytes(path));
+                var bytes = File.ReadAllBytes(storage.Resolve(relativePath));
+                var doc = parser.ParseXml(account, bytes);
                 Validation.DocumentAccount(registeredAccount, doc);
-                doc.XmlPath = storage.Save(doc, "xml", File.ReadAllBytes(path));
-                doc.XmlSha256 = DownloadPipeline.Hash(File.ReadAllBytes(path));
+                // Keep the actual historical path; reindexing must not copy or replace originals.
+                doc.XmlPath = relativePath;
+                doc.XmlSha256 = DownloadPipeline.Hash(bytes);
                 var pdf = Path.ChangeExtension(doc.XmlPath, ".pdf");
                 if (File.Exists(storage.Resolve(pdf)))
                 {
@@ -42,16 +44,25 @@ public sealed class DocumentIndexer(IStateRepository repository, IStorageProvide
             }
             catch (Exception ex) when (ex is ArgumentException or IOException or System.Xml.XmlException) { errors++; }
         }
+        var indexed = 0;
         repository.Update(s =>
         {
             foreach (var doc in documents)
             {
                 var index = s.Documents.FindIndex(d => d.Account == account && d.Type == doc.Type && d.AccessKey == doc.AccessKey);
                 if (index < 0) s.Documents.Add(doc);
-                else { doc.Id = s.Documents[index].Id; doc.Source = s.Documents[index].Source; s.Documents[index] = doc; }
+                else
+                {
+                    var previous = s.Documents[index];
+                    if (previous.XmlSha256 is not null && previous.XmlSha256 != doc.XmlSha256) { errors++; continue; }
+                    doc.Id = previous.Id; doc.Source = previous.Source;
+                    doc.PdfPath ??= previous.PdfPath; doc.PdfSha256 ??= previous.PdfSha256;
+                    s.Documents[index] = doc;
+                }
+                indexed++;
             }
             return true;
         });
-        return new { indexed = documents.Count, errors };
+        return new { indexed, errors };
     }
 }

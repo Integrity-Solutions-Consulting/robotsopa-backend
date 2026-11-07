@@ -58,7 +58,27 @@ public sealed class Voucher
     public string Source { get; set; } = "Imported";
     public string? XmlSha256 { get; set; }
     public string? PdfSha256 { get; set; }
+    // Optional for compatibility with documents indexed before detailed extraction existed.
+    public VoucherXmlData? XmlData { get; set; }
 }
+public sealed class VoucherXmlData
+{
+    public string? Version { get; set; }
+    public string? DocumentCode { get; set; }
+    public string? AuthorizationStatus { get; set; }
+    public List<VoucherXmlField> Fields { get; set; } = [];
+    public List<VoucherRetention> Retentions { get; set; } = [];
+    public List<VoucherXmlItem> Items { get; set; } = [];
+    public List<VoucherLine> Lines { get; set; } = [];
+    public List<VoucherTax> TaxLines { get; set; } = [];
+    public List<VoucherRelatedDocument> RelatedDocuments { get; set; } = [];
+}
+public sealed record VoucherXmlField(string Path, string Value);
+public sealed record VoucherXmlItem(string Kind, string Path, List<VoucherXmlField> Values);
+public sealed record VoucherLine(string Path, string? Code, string? Description, decimal? Quantity, decimal? UnitPrice, decimal? Discount, decimal? NetAmount);
+public sealed record VoucherTax(string Path, string? Code, string? RateCode, decimal? Base, decimal? Rate, decimal? Amount);
+public sealed record VoucherRelatedDocument(string Path, string? Code, string? Number, string? IssueDate, string? Authorization);
+public sealed record VoucherRetention(string? TaxCode, string? RetentionCode, decimal? Base, decimal? Rate, decimal? Amount, string? SupportCode, string? SupportNumber, string? SupportDate);
 public sealed record SriCheckpoint(DateOnly Date, string Type, int Page, int Row, bool Complete = false);
 public sealed record QueryResult(DateOnly Date, string Type, int Found, int Downloaded, int Errors, string Status);
 public sealed class LocalDelivery
