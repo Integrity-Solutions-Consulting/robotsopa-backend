@@ -141,10 +141,9 @@ public class JobProcessor(IStateRepository repository, IStorageProvider storage,
             {
                 var job = s.Executions.Single(e => e.Id == execution.Id);
                 if (execution.Query.Mode == "Stored") { job.Found = documents.Count; job.Processed = documents.Count; }
-                job.Errors = Math.Max(job.Errors, Math.Max(documents.Count(d => d.Status != "ValidadoXML"), job.Queries.Sum(q => q.Errors)));
-                if (job.Queries.Any(q => q.Status == "ConErrores") && job.Errors == 0) job.Errors = 1;
+                job.Errors = Math.Max(job.Errors, documents.Count(d => d.Status != "ValidadoXML"));
                 job.Status = job.CancelRequested ? "Cancelled" : job.Errors > 0 ? "CompletedWithWarnings" : "Completed";
-                job.Finished = DateTimeOffset.UtcNow; job.Message = execution.Query.Mode == "Sri" ? (job.Errors > 0 ? "Consultas finalizadas con errores; revise los resultados y reintente las descargas pendientes." : "Consultas finalizadas y reportes actualizados desde los archivos almacenados.") : "Reportes generados desde documentos almacenados; sin consulta SRI.";
+                job.Finished = DateTimeOffset.UtcNow; job.Message = execution.Query.Mode == "Sri" ? "Consultas finalizadas y reportes actualizados desde los archivos almacenados." : "Reportes generados desde documentos almacenados; sin consulta SRI.";
                 job.Stage = job.Status;
                 ExecutionProgress.Set(s,job.Id,job.Status,job.Message);
                 AuditTrail.Add(s,job.RequestedBy??"Sistema (Worker)","Resultado de procesamiento",job.Query.Account,job.Status);

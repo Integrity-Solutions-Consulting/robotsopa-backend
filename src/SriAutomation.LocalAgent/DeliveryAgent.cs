@@ -42,7 +42,7 @@ internal static class DeliveryAgent
         foreach (var item in pending)
         {
             try { await Deliver(client, root, item, cancellation); }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException or ArgumentException or HttpRequestException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or HttpRequestException)
             {
                 try { using var failure = await client.PostAsJsonAsync($"/delivery-agent/v1/{item.Id}/failure", new { code = "DeliveryFailed" }, cancellation); }
                 catch (HttpRequestException) { }
@@ -62,30 +62,13 @@ internal static class DeliveryAgent
         try
         {
             await File.WriteAllBytesAsync(temp, bytes, cancellation);
-            if (string.Equals(item.Kind, "xlsx", StringComparison.Ordinal))
-            {
-                try
-                {
-                    using var input = File.OpenRead(temp);
-                    using var workbook = new ClosedXML.Excel.XLWorkbook(input);
-                    if (!workbook.Worksheets.Any()) throw new InvalidDataException("El reporte recibido no contiene hojas.");
-                }
-                catch (Exception ex) when (ex is not OutOfMemoryException)
-                { throw new InvalidDataException("El reporte recibido no es un Excel válido.", ex); }
-            }
             if (File.Exists(destination))
             {
                 var existing = await File.ReadAllBytesAsync(destination, cancellation);
                 if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(existing), SHA256.HashData(bytes)))
                 {
                     if (!string.Equals(item.Kind, "xlsx", StringComparison.Ordinal)) throw new IOException("Existe un archivo diferente en el destino.");
-                    var relativeDirectory = Path.GetDirectoryName(item.DestinationPath.Replace('/', Path.DirectorySeparatorChar)) ?? "";
-                    var backupRelative = Path.Combine(relativeDirectory, ".versiones", Path.GetFileNameWithoutExtension(destination) + "_" + Guid.NewGuid().ToString("N") + ".xlsx");
-                    var backup = storage.Resolve(backupRelative);
-                    Directory.CreateDirectory(Path.GetDirectoryName(backup)!);
-                    // Recheck the directory after creation to avoid following redirected paths.
-                    backup = storage.Resolve(backupRelative);
-                    File.Replace(temp, destination, backup);
+                    File.Move(temp, destination, true);
                 }
             }
             else File.Move(temp, destination);

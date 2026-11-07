@@ -31,16 +31,6 @@ public sealed class PhaseTwoTests : IDisposable
         Assert.Equal(0, json.GetProperty("documents").GetInt32()); Assert.Equal(0, json.GetProperty("downloaded").GetInt32());
         Assert.Empty(json.GetProperty("recent").EnumerateArray()); Assert.Equal(JsonValueKind.Null, json.GetProperty("last").ValueKind);
     }
-    [Theory]
-    [InlineData(true, true)]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public void SriJobPreservesRequestedFormats(bool xml, bool pdf)
-    {
-        var state = new State(); state.Accounts.Add(new("a", "Cuenta"));
-        var job = Validation.Enqueue(state, new("a", new(2026, 9, 12), new(2026, 9, 12), ["Facturas"], Xml: xml, Pdf: pdf));
-        Assert.Equal(xml, job.Query.Xml); Assert.Equal(pdf, job.Query.Pdf);
-    }
     [Fact]
     public void SessionIsEncryptedAccountBoundExpiresAndDetectsTampering()
     {
@@ -111,23 +101,6 @@ public sealed class PhaseTwoTests : IDisposable
         var processor = new JobProcessor(repository, storage, new FixtureSri(() => throw new SriUnavailableException("Fixture sin conexión.")));
         for (var i = 0; i < 3; i++) await processor.Tick(CancellationToken.None);
         var job = repository.Read(s => s.Executions.Single()); Assert.Equal("Failed", job.Status); Assert.Equal(3, job.Attempts); Assert.Contains("SRI no respondió", job.Message);
-    }
-    [Theory]
-    [InlineData("ConErrores", 1, "CompletedWithWarnings")]
-    [InlineData("SinDocumentos", 0, "Completed")]
-    public async Task FinalStatusDistinguishesQueryErrorsFromConfirmedEmptyResults(string queryStatus, int errors, string expected)
-    {
-        var repository = new JsonStateRepository(Path.Combine(directory, "query-status"));
-        var storage = new DocumentStorage(Path.Combine(directory, "out"));
-        var date = new DateOnly(2026, 9, 12);
-        repository.Update(s => { s.Accounts.Add(new("a", "Cuenta")); return Validation.Enqueue(s, new("a", date, date, ["Facturas"])); });
-        var processor = new JobProcessor(repository, storage, new FixtureSri(() => repository.Update(s => {
-            s.Executions.Single().Queries.Add(new(date, "Facturas", errors, 0, errors, queryStatus)); return true;
-        })));
-        await processor.Tick(CancellationToken.None);
-        var result = repository.Read(s => s.Executions.Single());
-        Assert.Equal(expected, result.Status);
-        Assert.Equal(errors, result.Errors);
     }
     [Fact]
     public async Task HumanSuspensionStillProducesMonthlyReportForStoredDownloads()

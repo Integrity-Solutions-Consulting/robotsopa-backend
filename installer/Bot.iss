@@ -1,18 +1,10 @@
 ﻿#define MyAppName "Bot"
-#define MyAppVersion "1.0.1"
-#ifndef PublishDir
-  #define PublishDir "publish"
-#endif
+#define MyAppVersion "1.0.0"
 [Setup]
 AppId={{B2411B51-2C2D-47B1-887A-495C8974E3C5}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
 DefaultDirName={autopf}\Bot
-UsePreviousAppDir=yes
-UsePreviousGroup=yes
-CloseApplications=yes
-CloseApplicationsFilter=Bot.exe
-RestartApplications=no
 DefaultGroupName=Bot
 OutputDir=output
 OutputBaseFilename=Bot-Setup
@@ -23,7 +15,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
 UninstallDisplayIcon={app}\Bot.exe
 [Files]
-Source: "{#PublishDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "publish\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 [Icons]
 Name: "{autoprograms}\Bot"; Filename: "{app}\Bot.exe"
 Name: "{autodesktop}\Bot"; Filename: "{app}\Bot.exe"; Tasks: desktopicon

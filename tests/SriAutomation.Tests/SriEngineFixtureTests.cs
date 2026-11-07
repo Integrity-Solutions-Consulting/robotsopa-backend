@@ -53,7 +53,7 @@ public sealed class SriEngineFixtureTests
         try
         {
             var repository = new JsonStateRepository(Path.Combine(root, "state")); var storage = new DocumentStorage(Path.Combine(root, "out"));
-            var query = new Query("a", new(2026, 9, 12), new(2026, 9, 12), ["Facturas"], Xml: false);
+            var query = new Query("a", new(2026, 9, 12), new(2026, 9, 12), ["Facturas"]);
             var job = repository.Update(s => { s.Accounts.Add(new("a", "Fixture", "1790000000001", true)); return Validation.Enqueue(s, query); });
             await using var server = await FixtureServer.Start(Html);
             using var playwright = await Playwright.CreateAsync(); await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
@@ -84,31 +84,6 @@ public sealed class SriEngineFixtureTests
         await Assert.ThrowsAsync<HumanActionRequiredException>(() => manager.Ensure(page, "1790000000001"));
         await page.Locator("#login").EvaluateAsync("e=>e.hidden=true"); await page.Locator("#challenge").EvaluateAsync("e=>e.hidden=false");
         await Assert.ThrowsAsync<HumanActionRequiredException>(() => manager.Ensure(page, "1790000000001"));
-    }
-    [BrowserFact]
-    public async Task MissingXmlWithAvailablePdfRecordsPartialDownloadAsError()
-    {
-        var root = Path.Combine(Path.GetTempPath(), "sri-partial-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(root);
-        try
-        {
-            var repository = new JsonStateRepository(Path.Combine(root, "state"));
-            var storage = new DocumentStorage(Path.Combine(root, "out"));
-            var query = new Query("a", new(2026, 9, 12), new(2026, 9, 12), ["Facturas"]);
-            var job = repository.Update(s => { s.Accounts.Add(new("a", "Fixture", "1790000000001", true)); return Validation.Enqueue(s, query); });
-            await using var server = await FixtureServer.Start(Html);
-            using var playwright = await Playwright.CreateAsync();
-            await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
-            var page = await browser.NewPageAsync(); await page.GotoAsync(server.Url);
-            var profile = Profile(); profile.Xml = ".missing-xml";
-            await new SriExecutionEngine(repository, new DownloadPipeline(repository, storage, new XmlDocumentParser())).Run(page, profile, job, "1790000000001", CancellationToken.None);
-            var result = repository.Read(s => s.Executions.Single());
-            Assert.Equal("ConErrores", result.Queries.Single().Status);
-            Assert.Equal(2, result.Errors);
-            Assert.Equal(2, result.Downloaded);
-            Assert.All(repository.Read(s => s.Documents), d => { Assert.Null(d.XmlPath); Assert.NotNull(d.PdfPath); });
-        }
-        finally { Directory.Delete(root, true); }
     }
     [BrowserFact]
     public async Task EmptyDatesAreRecordedWithoutFailure()
