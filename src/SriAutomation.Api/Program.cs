@@ -37,13 +37,14 @@ builder.Services.AddSingleton<IStorageProvider>(services=>new DocumentStorage(ou
 builder.Services.AddSingleton<IDocumentParser, XmlDocumentParser>();
 builder.Services.AddEndpointsApiExplorer(); builder.Services.AddSwaggerGen(); builder.Services.AddHealthChecks().AddCheck<SriAutomation.Api.StorageHealthCheck>("storage");
 builder.Services.AddRateLimiter(o => o.AddFixedWindowLimiter("login", x => { x.PermitLimit = 10; x.Window = TimeSpan.FromMinutes(1); x.QueueLimit = 0; }));
-builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20_000_000);
+// Two individually bounded 20 MB files expand to roughly 53.4 MB in JSON Base64.
+builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 55_000_000);
 var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options => options.AddDefaultPolicy(policy => policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod().AllowCredentials()));
-var isolatedTlsProxy = IsolatedTlsProxy.Configure(Environment.GetEnvironmentVariable("SRI_TLS_PROXY_ISOLATED"), secureCookie, trustedProxies.Length > 0 || trustedNetworks.Length > 0);
+if (IsolatedTlsProxy.Configure(Environment.GetEnvironmentVariable("SRI_TLS_PROXY_ISOLATED"), secureCookie, trustedProxies.Length > 0 || trustedNetworks.Length > 0))
+    throw new InvalidOperationException("SRI_TLS_PROXY_ISOLATED=true ya no se admite; configure explícitamente las IP o redes de proxies confiables.");
 var app = builder.Build();
 if (trustedProxies.Length > 0 || trustedNetworks.Length > 0) app.UseForwardedHeaders();
-if (isolatedTlsProxy) app.Use((context, next) => { IsolatedTlsProxy.Apply(context, true); return next(); });
 app.UseCors();
 var database = app.Services.GetRequiredService<IPanelDatabase>();
 if (postgresConnection is null) { database.Initialize(adminUsername!, password!); database.SyncAudit(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Audit.ToList())); database.SyncAccounts(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Accounts.ToList())); }
@@ -143,9 +144,15 @@ if (postgresConnection is not null)
 
     string? AgentUser(HttpContext context)
     {
-        if (!context.Request.IsHttps || context.Request.Headers.ContainsKey("Origin")) return null;
-        if (!Guid.TryParse(context.Request.Headers["X-Delivery-Agent-Id"].ToString(), out var id)) return null;
-        var user = agentCredentials.Authenticate(id, context.Request.Headers["X-Delivery-Agent-Secret"].ToString());
+        string? Reject(string code) { app.Logger.LogWarning("Agent authentication rejected: {DiagnosticCode} {Method} {Path}", code, context.Request.Method, context.Request.Path.Value is "/execution-agent/v1/status" or "/execution-agent/v1/claim" ? context.Request.Path.Value : "agent-operation"); return null; }
+        if (!context.Request.IsHttps) return Reject("HTTPS_NOT_RECOGNIZED");
+        if (context.Request.Headers.ContainsKey("Origin")) return Reject("ORIGIN_PRESENT");
+        if (!Guid.TryParse(context.Request.Headers["X-Delivery-Agent-Id"].ToString(), out var id)) return Reject("AGENT_ID_INVALID");
+        AgentAuthenticationResult authentication;
+        try { authentication = agentCredentials.AuthenticateWithDiagnostic(id, context.Request.Headers["X-Delivery-Agent-Secret"].ToString()); }
+        catch (Exception ex) when (ex is Npgsql.NpgsqlException or TimeoutException) { app.Logger.LogError("Agent authentication failed: DATABASE_UNAVAILABLE {ExceptionType}", ex.GetType().Name); throw; }
+        var user = authentication.User;
+        if (user is null) return Reject(authentication.Code);
         if (user is not null && context.Request.Method == "POST" &&
             (context.Request.Path == "/execution-agent/v1/claim" || context.Request.Path.Value?.EndsWith("/renew", StringComparison.Ordinal) == true && context.Request.Path.StartsWithSegments("/execution-agent/v1")))
             agentCredentials.RecordExecutionActivity(id, user);

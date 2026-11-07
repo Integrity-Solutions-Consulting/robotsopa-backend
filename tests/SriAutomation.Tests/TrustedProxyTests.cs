@@ -30,5 +30,7 @@ public sealed class TrustedProxyTests
     public void InvalidProxyNetworkFailsClosed()
     {
         Assert.Throws<FormatException>(() => TrustedProxyConfiguration.Configure(new(), [], ["invalid"]));
+        Assert.Throws<InvalidOperationException>(() => TrustedProxyConfiguration.Configure(new(), [], ["0.0.0.0/0"]));
+        Assert.Throws<InvalidOperationException>(() => TrustedProxyConfiguration.Configure(new(), [], ["::/0"]));
     }
 }
