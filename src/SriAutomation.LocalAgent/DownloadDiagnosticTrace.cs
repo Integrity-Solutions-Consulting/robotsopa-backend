@@ -8,7 +8,7 @@ internal sealed class DownloadDiagnosticTrace
     internal static string FilePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SRI-Automation", "diagnostico", "query-steps.jsonl");
     public void Start()
     {
-        try { Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!); File.WriteAllText(FilePath, ""); }
+        try { Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!); Write("ExecutionStarted"); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { Console.Error.WriteLine("No se pudo crear el diagnóstico local de descargas."); }
     }
     public void Write(string step)

@@ -175,6 +175,8 @@ public sealed class RemoteExecutionIntegrationTests
             remote.Update(s => { s.Executions.Single().AttemptedKeys.Add(key); return true; });
             var pdf = PdfFixture.BuildLines(["CLAVE DE ACCESO: " + key]);
             var file = new DownloadedVoucher(account, "Facturas", key, date, null, pdf);
+            Assert.Throws<HttpRequestException>(() => remote.Process(file with { Pdf = [1, 2, 3] }));
+            Assert.Contains("Remote file failed: stage=Parse", logs.Text);
             var uploaded = remote.Process(file); var duplicate = remote.Process(file); Assert.Equal(uploaded.Id, duplicate.Id);
             Assert.Single(repo.Read(s => s.Documents));
             var redownloadRoot = Path.Combine(directory, "redownload");

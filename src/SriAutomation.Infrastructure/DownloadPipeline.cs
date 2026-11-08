@@ -4,7 +4,7 @@ using SriAutomation.Domain;
 
 namespace SriAutomation.Infrastructure;
 
-public sealed class DownloadPipeline(IStateRepository repository, IStorageProvider storage, IDocumentParser parser, OwnedContentStore? ownedContent = null) : IDownloadPipeline
+public sealed class DownloadPipeline(IStateRepository repository, IStorageProvider storage, IDocumentParser parser, OwnedContentStore? ownedContent = null, Action<string>? stage = null) : IDownloadPipeline
 {
     public bool IsAvailable(Voucher document, string extension)
     {
@@ -18,12 +18,15 @@ public sealed class DownloadPipeline(IStateRepository repository, IStorageProvid
     {
         if (repository is OwnedStateRepository && ownedContent is null) throw new InvalidOperationException("La ejecución distribuida requiere publicación protegida.");
         if (ownedContent is not null && !ownedContent.Uses(repository)) throw new InvalidOperationException("La publicación requiere el repositorio propietario asociado.");
+        stage?.Invoke("Account");
         var account = repository.Read(s => s.Accounts.SingleOrDefault(a => a.Id == download.Account)) ?? throw new ArgumentException("Cuenta no registrada.");
         if (download.Xml is null && download.Pdf is null) throw new ArgumentException("No hay archivos disponibles para este comprobante.");
+        stage?.Invoke("Parse");
         var document = download.Xml is not null ? parser.ParseXml(download.Account, download.Xml)
             : new PdfVoucherParser().Parse(download.Account, download.Type, download.Key, download.Issued, download.Pdf!);
         if (document.AccessKey != download.Key || document.Type != download.Type || document.Issued != download.Issued) throw new ArgumentException("El documento no coincide con la clave, tipo o emisión de la fila consultada.");
         if (document.IssuerTaxId is not null || download.Xml is not null) Validation.DocumentAccount(account, document);
+        stage?.Invoke("Validate");
         if (download.Pdf is not null)
         {
             var pdfText = PdfVoucherParser.ReadText(download.Pdf);
@@ -32,8 +35,10 @@ public sealed class DownloadPipeline(IStateRepository repository, IStorageProvid
             if (new PdfInspector().Check(download.Pdf, document.AccessKey) is { } warning) { document.Status = "Revisar"; document.Warning = string.Join(" ", document.Warning, warning); }
         }
         document.Source = "Sri";
+        stage?.Invoke("Publish");
         if (download.Xml is not null) { document.XmlPath = Save("xml", download.Xml); document.XmlSha256 = Hash(download.Xml); }
         if (download.Pdf is not null) { document.PdfPath = Save("pdf", download.Pdf); document.PdfSha256 = Hash(download.Pdf); }
+        stage?.Invoke("Commit");
         return repository.Update(s =>
         {
             var existing = s.Documents.SingleOrDefault(d => d.Account == document.Account && d.Type == document.Type && d.AccessKey == document.AccessKey);

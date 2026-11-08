@@ -103,15 +103,27 @@ public static class RemoteExecutionEndpoints
         group.MapPost("/{id}/files", (HttpContext c, string id, DownloadedVoucher file, IStorageProvider storage, IDocumentParser parser) =>
         {
             if (Identity(c) is null) return Results.Unauthorized();
-            var owner = Owner(c, id); var scoped = new OwnedStateRepository(repository, owner);
-            scoped.Update(s => { var job = s.Executions.Single(e => e.Id == id);
-                if (job.Status != "Running" || job.CancelRequested || file.Account != job.Query.Account || file.Issued < job.Query.From || file.Issued > job.Query.To || !job.Query.Types.Contains(file.Type) || !job.AttemptedKeys.Contains(file.Key)) throw new ArgumentException("Archivo fuera del trabajo autorizado.");
-                return true; });
-            var document = new DownloadPipeline(scoped, storage, parser, new OwnedContentStore(storage, scoped, owner)).Process(file);
-            var deliveries = new RemoteDeliveryStore(connection);
-            if (file.Xml is not null && document.XmlSha256 is not null) deliveries.Requeue(Identity(c)!, document.Id, "xml", document.XmlSha256);
-            if (file.Pdf is not null && document.PdfSha256 is not null) deliveries.Requeue(Identity(c)!, document.Id, "pdf", document.PdfSha256);
-            return Results.Ok(document);
+            var stage = "Ownership";
+            try
+            {
+                var owner = Owner(c, id); var scoped = new OwnedStateRepository(repository, owner);
+                stage = "Authorization";
+                scoped.Update(s => { var job = s.Executions.Single(e => e.Id == id);
+                    if (job.Status != "Running" || job.CancelRequested || file.Account != job.Query.Account || file.Issued < job.Query.From || file.Issued > job.Query.To || !job.Query.Types.Contains(file.Type) || !job.AttemptedKeys.Contains(file.Key)) throw new ArgumentException("Archivo fuera del trabajo autorizado.");
+                    return true; });
+                var document = new DownloadPipeline(scoped, storage, parser, new OwnedContentStore(storage, scoped, owner), value => stage = value).Process(file);
+                stage = "DeliveryRequeue";
+                var deliveries = new RemoteDeliveryStore(connection);
+                if (file.Xml is not null && document.XmlSha256 is not null) deliveries.Requeue(Identity(c)!, document.Id, "xml", document.XmlSha256);
+                if (file.Pdf is not null && document.PdfSha256 is not null) deliveries.Requeue(Identity(c)!, document.Id, "pdf", document.PdfSha256);
+                return Results.Ok(document);
+            }
+            catch (Exception ex)
+            {
+                var category = ex is InvalidOperationException && ex.Message.StartsWith("Execution ownership", StringComparison.Ordinal) ? "Lease" : "Other";
+                app.Logger.LogWarning("Remote file failed: stage={Stage} category={Category} type={Type}", stage, category, ex.GetType().Name);
+                throw;
+            }
         });
         group.MapPost("/{id}/finish", async (HttpContext c, string id, IStorageProvider storage) =>
         {

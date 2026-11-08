@@ -75,9 +75,9 @@ internal static class RemoteWorker
         trace.Start();
         var remote = new RemoteOwnedExecution(client, claim, trace.Write);
         var renewal = Task.Run(async () => {
-            try { while (!work.IsCancellationRequested) { await Task.Delay(TimeSpan.FromSeconds(10), work.Token); if (!await remote.Renew(work.Token)) { work.Cancel(); return; } } }
+            try { while (!work.IsCancellationRequested) { await Task.Delay(TimeSpan.FromSeconds(10), work.Token); if (!await remote.Renew(work.Token)) { trace.Write("LeaseRenewalNotConfirmed"); work.Cancel(); return; } } }
             catch (OperationCanceledException) when (work.IsCancellationRequested) { }
-            catch (Exception) { work.Cancel(); }
+            catch (Exception ex) { trace.Write($"LeaseRenewalError type={ex.GetType().Name}"); work.Cancel(); }
         });
         try
         {
@@ -143,7 +143,7 @@ internal static class RemoteWorker
             var result = await finish.Content.ReadFromJsonAsync<FinishResult>(cancellationToken: work.Token);
             Console.WriteLine(result?.Status is "Completed" or "CompletedWithWarnings" ? "Trabajo finalizado; consulte los resultados en el panel." : "El backend terminÃ³ el procesamiento sin confirmar Ã©xito; revise el historial.");
         }
-        catch (OperationCanceledException) when (work.IsCancellationRequested) { Console.Error.WriteLine("EjecuciÃ³n detenida por cancelaciÃ³n o pÃ©rdida de conexiÃ³n."); }
+        catch (OperationCanceledException) when (work.IsCancellationRequested) { trace.Write("ExecutionCancelledOrLeaseLost"); Console.Error.WriteLine("EjecuciÃ³n detenida por cancelaciÃ³n o pÃ©rdida de conexiÃ³n."); }
         catch (HumanActionRequiredException ex) when (ex.Message == "HumanChallenge")
         {
             Console.Error.WriteLine("El SRI solicita CAPTCHA o MFA; revise el historial y reanude con intervenciÃ³n autorizada.");
@@ -156,11 +156,13 @@ internal static class RemoteWorker
         }
         catch (Exception ex) when (ex is HumanActionRequiredException or PortalRecognitionException or PlaywrightException or TimeoutException or IOException or HttpRequestException or InvalidOperationException)
         {
+            trace.Write($"ExecutionStopped type={ex.GetType().Name}");
             Console.Error.WriteLine("EjecuciÃ³n detenida; revise el historial y la ventana SRI.");
             try { using var result = await remote.PostAsync("stop", CancellationToken.None); } catch (Exception) { }
         }
-        catch (Exception)
+        catch (Exception ex)
         {
+            trace.Write($"ExecutionStopped type={ex.GetType().Name}");
             Console.Error.WriteLine("EjecuciÃ³n interrumpida; revise el historial.");
             try { using var result = await remote.PostAsync("stop", CancellationToken.None); } catch (Exception) { }
         }
@@ -197,8 +199,10 @@ internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim
     public async Task<bool> Renew(CancellationToken token)
     {
         using var response = await Send(Request(HttpMethod.Post, "/renew"), token);
-        if (!response.IsSuccessStatusCode) return false;
+        if (!response.IsSuccessStatusCode) { trace?.Invoke($"LeaseRenewalHttpStatus status={(int)response.StatusCode}"); return false; }
         var value = await response.Content.ReadFromJsonAsync<Renewal>(cancellationToken: token);
+        if (value is { Cancelled: true }) trace?.Invoke("LeaseRenewalCancelled");
+        else if (value is null) trace?.Invoke("LeaseRenewalEmptyResponse");
         return value is { Cancelled: false };
     }
     public async Task<bool> SubmitCredentials(IPage page, string expectedTaxId, CancellationToken token)
@@ -239,10 +243,21 @@ internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim
     {
         var request = Request(HttpMethod.Post, "/files"); request.Content = JsonContent.Create(file);
         trace?.Invoke("ARCHIVO_ENVIADO_API");
-        using var response = Send(request).GetAwaiter().GetResult(); response.EnsureSuccessStatusCode();
-        var voucher = response.Content.ReadFromJsonAsync<Voucher>().GetAwaiter().GetResult() ?? throw new IOException("Documento no confirmado.");
-        trace?.Invoke("ARCHIVO_CONFIRMADO_API");
-        return voucher;
+        HttpResponseMessage response;
+        try { response = Send(request).GetAwaiter().GetResult(); }
+        catch (Exception ex) { trace?.Invoke($"FileTransportError type={ex.GetType().Name}"); throw; }
+        using (response)
+        {
+            trace?.Invoke($"FileApiStatus status={(int)response.StatusCode}");
+            response.EnsureSuccessStatusCode();
+            try
+            {
+                var voucher = response.Content.ReadFromJsonAsync<Voucher>().GetAwaiter().GetResult() ?? throw new IOException("Documento no confirmado.");
+                trace?.Invoke("ARCHIVO_CONFIRMADO_API");
+                return voucher;
+            }
+            catch (Exception ex) { trace?.Invoke($"FileResponseError type={ex.GetType().Name}"); throw; }
+        }
     }
     private sealed record Renewal(bool Cancelled);
     private sealed record RemoteCredential(string Username, string Password);
