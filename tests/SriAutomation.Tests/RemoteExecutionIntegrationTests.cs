@@ -177,6 +177,18 @@ public sealed class RemoteExecutionIntegrationTests
             var file = new DownloadedVoucher(account, "Facturas", key, date, null, pdf);
             var uploaded = remote.Process(file); var duplicate = remote.Process(file); Assert.Equal(uploaded.Id, duplicate.Id);
             Assert.Single(repo.Read(s => s.Documents));
+            var redownloadRoot = Path.Combine(directory, "redownload");
+            var redownloadLock = Path.Combine(directory, "redownload.lock");
+            var localPdf = Path.Combine(redownloadRoot, taxId, "2026", "09", "Facturas", key + ".pdf");
+            Assert.False(LocalDocumentAvailability.IsAvailable(redownloadRoot, taxId, uploaded, "pdf"));
+            await DeliveryAgent.PollOnce(transport, redownloadRoot, redownloadLock, CancellationToken.None);
+            Assert.True(LocalDocumentAvailability.IsAvailable(redownloadRoot, taxId, uploaded, "pdf"));
+            File.Delete(localPdf);
+            Assert.False(LocalDocumentAvailability.IsAvailable(redownloadRoot, taxId, uploaded, "pdf"));
+            remote.Process(file);
+            await DeliveryAgent.PollOnce(transport, redownloadRoot, redownloadLock, CancellationToken.None);
+            Assert.True(LocalDocumentAvailability.IsAvailable(redownloadRoot, taxId, uploaded, "pdf"));
+            Assert.Single(Directory.GetFiles(Path.GetDirectoryName(localPdf)!, "*.pdf"));
             await using (var portal = await FixtureServer.Start(SriEngineFixtureTests.Html))
             using (var playwright = await Playwright.CreateAsync())
             await using (var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true }))
@@ -215,8 +227,8 @@ public sealed class RemoteExecutionIntegrationTests
             await File.WriteAllTextAsync(conflict, "contenido distinto");
             Sql("UPDATE remote_deliveries SET status='Pending' WHERE document_id='" + documents[0].Id + "' AND kind='pdf'");
             await DeliveryAgent.PollOnce(transport, desktop, deliveryLock, CancellationToken.None);
-            Assert.Equal("contenido distinto", await File.ReadAllTextAsync(conflict));
-            Assert.Contains(deliveries.Pending("tester"), d => d.DocumentId == documents[0].Id && d.Attempts > 0);
+            Assert.Equal(documents[0].PdfSha256, DownloadPipeline.Hash(await File.ReadAllBytesAsync(conflict)));
+            Assert.DoesNotContain(deliveries.Pending("tester"), d => d.DocumentId == documents[0].Id && d.Kind == "pdf");
             var emptyDate = new DateOnly(2025, 1, 3);
             repo.Update(s => { s.Executions.Add(new() { Id = "empty", RequestedBy = "tester", Query = new(account, emptyDate, emptyDate, ["Facturas"], Pdf: true, Xml: false) }); return true; });
             using var emptyClaimResponse = await third.PostAsync("/execution-agent/v1/claim", null);

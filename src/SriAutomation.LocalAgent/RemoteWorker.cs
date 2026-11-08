@@ -1,4 +1,4 @@
-﻿using System.Net;
+using System.Net;
 using System.Net.Http.Json;
 using Microsoft.Playwright;
 using SriAutomation.Application;
@@ -71,7 +71,9 @@ internal static class RemoteWorker
     private static async Task Execute(HttpClient client, Claim claim, CancellationToken stopping)
     {
         using var work = CancellationTokenSource.CreateLinkedTokenSource(stopping);
-        var remote = new RemoteOwnedExecution(client, claim);
+        var trace = new DownloadDiagnosticTrace();
+        trace.Start();
+        var remote = new RemoteOwnedExecution(client, claim, trace.Write);
         var renewal = Task.Run(async () => {
             try { while (!work.IsCancellationRequested) { await Task.Delay(TimeSpan.FromSeconds(10), work.Token); if (!await remote.Renew(work.Token)) { work.Cancel(); return; } } }
             catch (OperationCanceledException) when (work.IsCancellationRequested) { }
@@ -119,6 +121,7 @@ internal static class RemoteWorker
             remote.Update(s => { ExecutionProgress.Set(s, job.Id, "OpeningQuery", "Abriendo la consulta SRI autorizada."); return true; });
             page = await AuthorizedQueryNavigation.Open(page, bound, taxId, work.Token, authenticate: p => remote.SubmitCredentials(p, taxId, work.Token), humanAction: p => WaitForHuman(p, remote, job.Id, work.Token));
             var profile = await ObservedPortalProfile.Discover(page, taxId, session: bound); profile.Validate();
+            profile.TraceStep = trace.Write;
             try
             {
                 for (var challengeAttempt = 0; ; challengeAttempt++)
@@ -181,7 +184,7 @@ internal static class RemoteWorker
     private sealed record FinishResult(string Status);
 }
 
-internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim claim) : IStateRepository, IDownloadPipeline
+internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim claim, Action<string>? trace = null) : IStateRepository, IDownloadPipeline
 {
     private string Path => "/execution-agent/v1/" + Validation.Identifier(claim.JobId);
     private HttpRequestMessage Request(HttpMethod method, string suffix)
@@ -228,14 +231,18 @@ internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim
     }
     public bool IsAvailable(Voucher document, string extension)
     {
-        using var response = Send(Request(HttpMethod.Get, "/available/" + Validation.Identifier(document.Id) + "/" + extension)).GetAwaiter().GetResult(); response.EnsureSuccessStatusCode();
-        return response.Content.ReadFromJsonAsync<bool>().GetAwaiter().GetResult();
+        var account = Read(s => s.Accounts.Single(a => a.Id == document.Account));
+        var root = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "SRI-Automation");
+        return LocalDocumentAvailability.IsAvailable(root, account.TaxId ?? account.Id, document, extension);
     }
     public Voucher Process(DownloadedVoucher file)
     {
         var request = Request(HttpMethod.Post, "/files"); request.Content = JsonContent.Create(file);
+        trace?.Invoke("ARCHIVO_ENVIADO_API");
         using var response = Send(request).GetAwaiter().GetResult(); response.EnsureSuccessStatusCode();
-        return response.Content.ReadFromJsonAsync<Voucher>().GetAwaiter().GetResult() ?? throw new IOException("Documento no confirmado.");
+        var voucher = response.Content.ReadFromJsonAsync<Voucher>().GetAwaiter().GetResult() ?? throw new IOException("Documento no confirmado.");
+        trace?.Invoke("ARCHIVO_CONFIRMADO_API");
+        return voucher;
     }
     private sealed record Renewal(bool Cancelled);
     private sealed record RemoteCredential(string Username, string Password);

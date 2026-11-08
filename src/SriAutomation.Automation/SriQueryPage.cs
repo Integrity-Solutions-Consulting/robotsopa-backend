@@ -96,14 +96,24 @@ public sealed class SriQueryPage(IPage page, PortalProfile profile)
         if (before == after) throw new InvalidDataException("La paginación no avanzó; se detuvo para evitar un bucle.");
         return true;
     }
+    public async Task TraceRowStructure(PortalRow row)
+    {
+        if (profile.TraceStep is null) return;
+        try {
+            // Structural categories only; never row text, attributes, links or scripts.
+            var structure=await row.Locator.EvaluateAsync<string>("e=>JSON.stringify(Array.from(e.cells).slice(-8).map((c,i,a)=>({fromRight:a.length-i,header:(()=>{let h=e.closest('table')?.querySelectorAll('thead tr:last-child th');let t=h?.length===e.cells.length?h[c.cellIndex]?.textContent?.trim().toLowerCase():'';return /^(xml|pdf|ride)$/.test(t||'')?t:'other'})(),controls:Array.from(c.querySelectorAll('a,button,input,[role=button]')).slice(0,20).map(x=>({tag:['A','BUTTON','INPUT'].includes(x.tagName)?x.tagName:'OTHER',type:x.tagName==='INPUT'&&['submit','image','button'].includes(x.type)?x.type:null,visible:!!(x.offsetWidth||x.offsetHeight||x.getClientRects().length),disabled:x.matches(':disabled,[aria-disabled=true]'),href:x.hasAttribute('href'),onclick:x.hasAttribute('onclick'),target:x.hasAttribute('target'),download:x.hasAttribute('download'),icons:Array.from(x.querySelectorAll('img,span,i,svg')).map(y=>y.tagName).slice(0,10)}))})))");
+            profile.TraceStep.Invoke($"DownloadRowStructure {structure}");
+        } catch (PlaywrightException) { profile.TraceStep.Invoke("DownloadRowStructureError PlaywrightException"); }
+    }
     public async Task<byte[]?> Download(PortalRow row, string extension, CancellationToken cancellation)
     {
         if(profile.RuntimeObserved) {
-            var observed=await ObservedPortalProfile.DownloadControl(row.Locator,extension);
+            profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlChecking");
+            ILocator? observed;
+            try { observed=await ObservedPortalProfile.DownloadControl(row.Locator,extension); }
+            catch (Exception ex) when (ex is InvalidDataException or PlaywrightException) { profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlError {ex.GetType().Name}"); throw; }
             if(observed is null){
-                // Record only generic technical attributes; never row text, links or values.
-                var structure=await row.Locator.Locator("a,button,input,span,i,img").EvaluateAllAsync<string>("es=>JSON.stringify(es.slice(0,80).map(e=>({tag:e.tagName,type:e.tagName==='INPUT'?e.type:null,classes:(typeof e.className==='string'?e.className:'').split(/\\s+/).filter(c=>/^[a-z_-]{1,60}$/i.test(c)),image:e.tagName==='IMG'&&/^[a-z_-]+\\.[a-z]+$/i.test((e.getAttribute('src')||'').split('/').pop())?(e.getAttribute('src')||'').split('/').pop():null,hints:[e.getAttribute('title'),e.getAttribute('aria-label'),e.getAttribute('alt'),e.textContent].map(v=>/xml/i.test(v||'')?'xml':/pdf|ride/i.test(v||'')?'pdf':null).filter(Boolean)})))");
-                profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlMissing {structure}");return null;
+                profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlMissing");return null;
             }
             profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlFound");
             return await Transfer(observed);
@@ -112,6 +122,7 @@ public sealed class SriQueryPage(IPage page, PortalProfile profile)
         if (string.IsNullOrWhiteSpace(selector)) return null;
         var control = row.Locator.Locator(selector);
         if (await control.CountAsync() == 0 || !await control.IsVisibleAsync() || await control.IsDisabledAsync()) return null;
+        profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlFound");
         return await Transfer(control);
         async Task<byte[]?> Transfer(ILocator control) {
         for (var attempt = 0; ; attempt++)
@@ -119,7 +130,9 @@ public sealed class SriQueryPage(IPage page, PortalProfile profile)
             cancellation.ThrowIfCancellationRequested();
             try
             {
-                var download = await page.RunAndWaitForDownloadAsync(() => control.ClickAsync(), new() { Timeout = profile.TimeoutMs });
+                profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ClickAttempted");
+                var download = await page.RunAndWaitForDownloadAsync(async () => { await control.ClickAsync(); profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ClickCompleted"); }, new() { Timeout = profile.TimeoutMs });
+                profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}Received");
                 if (await download.FailureAsync() is not null) throw new IOException("Descarga incompleta.");
                 await using var source = await download.CreateReadStreamAsync() ?? throw new IOException("Descarga sin contenido.");
                 using var bytes = new MemoryStream(); var buffer = new byte[81920];

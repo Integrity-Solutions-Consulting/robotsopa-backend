@@ -30,6 +30,14 @@ public sealed class RemoteDeliveryStore(string connectionString)
         return cmd.ExecuteNonQuery() == 1;
     }
 
+    public void Requeue(string username, string documentId, string kind, string hash)
+    {
+        using var db = new NpgsqlConnection(connectionString); db.Open();
+        using var cmd = new NpgsqlCommand($"UPDATE remote_deliveries d SET status='Pending', delivered_at=NULL, last_error=NULL WHERE {Authorized} AND d.document_id=@document AND d.kind=@kind AND d.sha256=@hash", db);
+        cmd.Parameters.AddWithValue("username", username); cmd.Parameters.AddWithValue("document", documentId);
+        cmd.Parameters.AddWithValue("kind", kind); cmd.Parameters.AddWithValue("hash", hash);
+        cmd.ExecuteNonQuery();
+    }
     public IReadOnlyList<PendingRemoteDelivery> Pending(string username)
     {
         using var db = new NpgsqlConnection(connectionString); db.Open();

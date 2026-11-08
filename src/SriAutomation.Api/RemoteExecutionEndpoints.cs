@@ -107,7 +107,11 @@ public static class RemoteExecutionEndpoints
             scoped.Update(s => { var job = s.Executions.Single(e => e.Id == id);
                 if (job.Status != "Running" || job.CancelRequested || file.Account != job.Query.Account || file.Issued < job.Query.From || file.Issued > job.Query.To || !job.Query.Types.Contains(file.Type) || !job.AttemptedKeys.Contains(file.Key)) throw new ArgumentException("Archivo fuera del trabajo autorizado.");
                 return true; });
-            return Results.Ok(new DownloadPipeline(scoped, storage, parser, new OwnedContentStore(storage, scoped, owner)).Process(file));
+            var document = new DownloadPipeline(scoped, storage, parser, new OwnedContentStore(storage, scoped, owner)).Process(file);
+            var deliveries = new RemoteDeliveryStore(connection);
+            if (file.Xml is not null && document.XmlSha256 is not null) deliveries.Requeue(Identity(c)!, document.Id, "xml", document.XmlSha256);
+            if (file.Pdf is not null && document.PdfSha256 is not null) deliveries.Requeue(Identity(c)!, document.Id, "pdf", document.PdfSha256);
+            return Results.Ok(document);
         });
         group.MapPost("/{id}/finish", async (HttpContext c, string id, IStorageProvider storage) =>
         {

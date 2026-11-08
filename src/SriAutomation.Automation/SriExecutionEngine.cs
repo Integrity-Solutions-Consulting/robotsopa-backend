@@ -45,17 +45,28 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                     for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
                     {
                         var row = rows[rowIndex];
-                        if (!seenKeys.Add(row.Key)) continue;
+                        profile.TraceStep?.Invoke($"DownloadRow page={pageNumber + 1} row={rowIndex + 1}");
+                        await portal.TraceRowStructure(row);
+                        if (!seenKeys.Add(row.Key)) { profile.TraceStep?.Invoke("DownloadRowSkipped Duplicate"); continue; }
                         count++;
                         Progress("Running");
+                        profile.TraceStep?.Invoke("DownloadRowProgressRecorded");
                         // Tras reinicio se reconstruye la página JSF actual y se deduplica por clave,
                         // sin saltar índices que podrían haber cambiado de orden en el portal.
                         SaveCheckpoint(new(date, type, pageNumber, rowIndex));
+                        profile.TraceStep?.Invoke("DownloadRowCheckpointRecorded");
                         cancellation.ThrowIfCancellationRequested(); await session.Ensure(page, taxId);
-                        var existing = repository.Read(s => s.Documents.SingleOrDefault(d => d.Account == query.Account && d.Type == type && d.AccessKey == row.Key));
-                        var needXml = query.Xml && (existing is null || !downloads.IsAvailable(existing, "xml"));
-                        var needPdf = query.Pdf && (existing is null || !downloads.IsAvailable(existing, "pdf"));
-                        if (!needXml && !needPdf) { SaveCheckpoint(new(date, type, pageNumber, rowIndex + 1)); continue; }
+                        profile.TraceStep?.Invoke("DownloadRowSessionConfirmed");
+                        profile.TraceStep?.Invoke("DownloadRowCheckingAvailability");
+                        Voucher? existing; bool needXml, needPdf;
+                        try {
+                            existing = repository.Read(s => s.Documents.SingleOrDefault(d => d.Account == query.Account && d.Type == type && d.AccessKey == row.Key));
+                            needXml = query.Xml && (existing is null || !downloads.IsAvailable(existing, "xml"));
+                            needPdf = query.Pdf && (existing is null || !downloads.IsAvailable(existing, "pdf"));
+                        } catch (Exception ex) { profile.TraceStep?.Invoke($"DownloadAvailabilityError {ex.GetType().Name}"); throw; }
+                        profile.TraceStep?.Invoke($"DownloadRowDecision pdfRequested={query.Pdf} xmlRequested={query.Xml} existing={existing is not null} pdfNeeded={needPdf} xmlNeeded={needXml}");
+                        if (!needXml && !needPdf) { profile.TraceStep?.Invoke("DownloadRowSkipped NoFilesNeeded"); SaveCheckpoint(new(date, type, pageNumber, rowIndex + 1)); continue; }
+                        profile.TraceStep?.Invoke("DownloadRowPreparingAttempt");
                         repository.Update(s => {
                             var e = s.Executions.Single(e => e.Id == execution.Id);
                             if (e.AttemptedKeys.Contains(row.Key)) return true;
@@ -70,6 +81,7 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                             if (needPdf) try { pdf = await portal.Download(row, "pdf", cancellation); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga PDF fallida."); }
                             Stage("Processing");
                             var document = downloads.Process(new(query.Account, type, row.Key, row.Issued, xml, pdf));
+                            profile.TraceStep?.Invoke($"DownloadFilesProcessed xml={xml is not null} pdf={pdf is not null}");
                             if (needXml && xml is null) transferIssues.Add("XML no disponible; documento parcial.");
                             if (needPdf && pdf is null) transferIssues.Add("PDF no disponible; documento parcial.");
                             if (transferIssues.Count > 0)
@@ -82,6 +94,7 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                         }
                         catch (Exception ex) when (ex is ArgumentException or InvalidDataException or System.Xml.XmlException)
                         {
+                            profile.TraceStep?.Invoke($"DownloadProcessingError {ex.GetType().Name}");
                             errors++;
                             repository.Update(s => { var e = s.Executions.Single(e => e.Id == execution.Id); e.Errors++; e.Issues.Add($"{date:yyyy-MM-dd} · {type} · fila {rowIndex + 1}: archivo ausente, inválido o no coincidente; revisar y reintentar."); return true; });
                             if (existing is not null) repository.Update(s => { var d = s.Documents.Single(d => d.Id == existing.Id); d.Status = "Revisar"; d.Warning = "No se pudo confirmar la integridad de los archivos solicitados. Se conservó el contenido existente."; return true; });

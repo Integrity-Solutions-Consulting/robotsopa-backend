@@ -67,7 +67,6 @@ internal static class DeliveryAgent
                 var existing = await File.ReadAllBytesAsync(destination, cancellation);
                 if (!CryptographicOperations.FixedTimeEquals(SHA256.HashData(existing), SHA256.HashData(bytes)))
                 {
-                    if (!string.Equals(item.Kind, "xlsx", StringComparison.Ordinal)) throw new IOException("Existe un archivo diferente en el destino.");
                     File.Move(temp, destination, true);
                 }
             }
