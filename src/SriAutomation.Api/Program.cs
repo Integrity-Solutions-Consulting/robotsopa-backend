@@ -74,7 +74,12 @@ app.Use(async (context, next) =>
     catch (BadHttpRequestException) { await Results.Problem("Solicitud invÃ¡lida. Revise los campos admitidos.",statusCode:400).ExecuteAsync(context); }
     catch (IOException) { await Results.Problem("Almacenamiento ocupado o no disponible. Reintente.", statusCode: 503).ExecuteAsync(context); }
     catch (Exception ex) { app.Logger.LogError("Error interno de tipo {Type}", ex.GetType().Name); await Results.Problem("Error interno.", statusCode: 500).ExecuteAsync(context); }
-    finally { AuditEndpoints.RecordRequest(context, app.Services.GetRequiredService<IStateRepository>()); }
+    finally
+    {
+        if (context.Request.Method == "POST" && context.Request.Path.StartsWithSegments("/execution-agent/v1") && context.Request.Path.Value?.EndsWith("/files", StringComparison.Ordinal) == true && context.Response.StatusCode == 400 && !context.Items.ContainsKey("FileRejectionLogged"))
+            app.Logger.LogWarning("Remote file failed: code={Code}", "REQUEST_BINDING_OR_OTHER");
+        AuditEndpoints.RecordRequest(context, app.Services.GetRequiredService<IStateRepository>());
+    }
 });
 app.UseRateLimiter(); if (app.Environment.IsDevelopment()) { app.UseSwagger(); app.UseSwaggerUI(); } app.MapHealthChecks("/health");
 app.MapGet("/health/ready", () => { try { if (postgresConnection is null) return Results.StatusCode(503); PostgresAdministration.Verify(postgresConnection); return Results.Ok(); } catch { return Results.StatusCode(503); } });

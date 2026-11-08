@@ -104,12 +104,18 @@ public static class RemoteExecutionEndpoints
         {
             if (Identity(c) is null) return Results.Unauthorized();
             var stage = "Ownership";
+            string? rejectionCode = null;
             try
             {
                 var owner = Owner(c, id); var scoped = new OwnedStateRepository(repository, owner);
                 stage = "Authorization";
                 scoped.Update(s => { var job = s.Executions.Single(e => e.Id == id);
-                    if (job.Status != "Running" || job.CancelRequested || file.Account != job.Query.Account || file.Issued < job.Query.From || file.Issued > job.Query.To || !job.Query.Types.Contains(file.Type) || !job.AttemptedKeys.Contains(file.Key)) throw new ArgumentException("Archivo fuera del trabajo autorizado.");
+                    rejectionCode = job.Status != "Running" || job.CancelRequested ? "JOB_NOT_RUNNING" :
+                        file.Account != job.Query.Account ? "JOB_ACCOUNT_MISMATCH" :
+                        file.Issued < job.Query.From || file.Issued > job.Query.To ? "JOB_DATE_OUT_OF_RANGE" :
+                        !job.Query.Types.Contains(file.Type) ? "JOB_TYPE_MISMATCH" :
+                        !job.AttemptedKeys.Contains(file.Key) ? "JOB_KEY_NOT_ATTEMPTED" : null;
+                    if (rejectionCode is not null) throw new ArgumentException("Archivo fuera del trabajo autorizado.");
                     return true; });
                 var document = new DownloadPipeline(scoped, storage, parser, new OwnedContentStore(storage, scoped, owner), value => stage = value).Process(file);
                 stage = "DeliveryRequeue";
@@ -121,7 +127,8 @@ public static class RemoteExecutionEndpoints
             catch (Exception ex)
             {
                 var category = ex is InvalidOperationException && ex.Message.StartsWith("Execution ownership", StringComparison.Ordinal) ? "Lease" : "Other";
-                app.Logger.LogWarning("Remote file failed: stage={Stage} category={Category} type={Type}", stage, category, ex.GetType().Name);
+                c.Items["FileRejectionLogged"] = true;
+                app.Logger.LogWarning("Remote file failed: stage={Stage} category={Category} type={Type} code={Code}", stage, category, ex.GetType().Name, rejectionCode ?? FileRejectionDiagnostics.Code(stage, ex));
                 throw;
             }
         });
