@@ -43,21 +43,18 @@ public sealed class DeliveryAgentCredentials(string connectionString)
         finally { CryptographicOperations.ZeroMemory(bytes); }
     }
 
-    public string? Authenticate(Guid id, string secret) => AuthenticateWithDiagnostic(id, secret).User;
-
-    public AgentAuthenticationResult AuthenticateWithDiagnostic(Guid id, string secret)
+    public string? Authenticate(Guid id, string secret)
     {
         byte[] supplied;
         try { supplied = Convert.FromHexString(secret); }
-        catch (FormatException) { return new(null, "CREDENTIAL_INVALID"); }
-        if (supplied.Length != 32) return new(null, "CREDENTIAL_INVALID");
+        catch (FormatException) { return null; }
+        if (supplied.Length != 32) return null;
         using var db = new NpgsqlConnection(connectionString); db.Open();
-        using var cmd = new NpgsqlCommand("SELECT a.username,a.secret_hash,a.revoked_at,u.password_hash IS NOT NULL FROM delivery_agents a LEFT JOIN panel_users u ON u.username=a.username WHERE a.id=@id", db);
+        using var cmd = new NpgsqlCommand("SELECT a.username,a.secret_hash FROM delivery_agents a JOIN panel_users u ON u.username=a.username WHERE a.id=@id AND a.revoked_at IS NULL AND u.password_hash IS NOT NULL", db);
         cmd.Parameters.AddWithValue("id", id);
         using var reader = cmd.ExecuteReader();
-        if (!reader.Read()) return new(null, "AGENT_NOT_FOUND");
-        if (!reader.IsDBNull(2) || !reader.GetBoolean(3)) return new(null, "AGENT_DISABLED");
-        return CryptographicOperations.FixedTimeEquals(SHA256.HashData(supplied), (byte[])reader[1]) ? new(reader.GetString(0), "AUTHENTICATED") : new(null, "CREDENTIAL_INVALID");
+        if (!reader.Read()) return null;
+        return CryptographicOperations.FixedTimeEquals(SHA256.HashData(supplied), (byte[])reader[1]) ? reader.GetString(0) : null;
     }
 
     public void RecordExecutionActivity(Guid id, string username)
@@ -84,7 +81,5 @@ public sealed class DeliveryAgentCredentials(string connectionString)
         return cmd.ExecuteScalar() is true;
     }
 }
-
-public sealed record AgentAuthenticationResult(string? User, string Code);
 
 public sealed record DeliveryAgentInfo(Guid Id, string Label, DateTime CreatedAt, DateTime? RevokedAt, DateTime? LastSeenAt);

@@ -41,9 +41,7 @@ public partial class MainWindow : Window
         try {
             var s = ReadSettings(); using var client = new HttpClient(new HttpClientHandler { AllowAutoRedirect = false }) { BaseAddress = new Uri(s.Api), Timeout = TimeSpan.FromSeconds(20) };
             client.DefaultRequestHeaders.Add("X-Delivery-Agent-Id", s.AgentId); client.DefaultRequestHeaders.Add("X-Delivery-Agent-Secret", s.Secret);
-            using var response = await client.GetAsync("/execution-agent/v1/status");
-            if (!response.IsSuccessStatusCode) { Connection.Text = "Conexión: no disponible"; Append($"Prueba de conexión: HTTP {(int)response.StatusCode} en /execution-agent/v1/status. Revise los diagnósticos del servidor o del proxy.", true); return; }
-            var status = await response.Content.ReadFromJsonAsync<Status>();
+            using var response = await client.GetAsync("/execution-agent/v1/status"); response.EnsureSuccessStatusCode(); var status = await response.Content.ReadFromJsonAsync<Status>();
             if (status?.Authenticated != true) throw new InvalidOperationException("La API no confirmó la identidad.");
             Connection.Text = status.ExecutionAvailable ? "Conexión: autenticada; ejecución disponible" : "Conexión: autenticada; ejecución no habilitada"; LastContact.Text = "Última comunicación: " + DateTime.Now.ToString("g");
         } catch (Exception ex) when (ex is ArgumentException or HttpRequestException or TaskCanceledException or JsonException or InvalidOperationException) { Connection.Text = "Conexión: no disponible"; Append("No se pudo verificar la conexión: " + ex.GetType().Name, true); }

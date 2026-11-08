@@ -181,7 +181,7 @@ internal static class RemoteWorker
     private sealed record FinishResult(string Status);
 }
 
-internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim claim, Action<string>? trace = null) : IStateRepository, IDownloadPipeline
+internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim claim) : IStateRepository, IDownloadPipeline
 {
     private string Path => "/execution-agent/v1/" + Validation.Identifier(claim.JobId);
     private HttpRequestMessage Request(HttpMethod method, string suffix)
@@ -233,12 +233,9 @@ internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim
     }
     public Voucher Process(DownloadedVoucher file)
     {
-        trace?.Invoke("ARCHIVO_ENVIADO_API");
         var request = Request(HttpMethod.Post, "/files"); request.Content = JsonContent.Create(file);
         using var response = Send(request).GetAwaiter().GetResult(); response.EnsureSuccessStatusCode();
-        var document = response.Content.ReadFromJsonAsync<Voucher>().GetAwaiter().GetResult() ?? throw new IOException("Documento no confirmado.");
-        trace?.Invoke("ARCHIVO_CONFIRMADO_API");
-        return document;
+        return response.Content.ReadFromJsonAsync<Voucher>().GetAwaiter().GetResult() ?? throw new IOException("Documento no confirmado.");
     }
     private sealed record Renewal(bool Cancelled);
     private sealed record RemoteCredential(string Username, string Password);

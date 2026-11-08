@@ -98,7 +98,7 @@ public static class ObservedPortalProfile
     {
         var matches=new List<ILocator>();foreach(var c in await row.Locator("a,button,input[type=submit],input[type=image]").AllAsync()) {
             if(!await c.IsVisibleAsync())continue;
-            var description=await c.EvaluateAsync<string>("e=>[e.innerText,e.getAttribute('title'),e.getAttribute('aria-label'),e.getAttribute('alt'),e.getAttribute('src'),e.getAttribute('href'),e.getAttribute('class'),...Array.from(e.querySelectorAll('img,span,i,svg')).flatMap(x=>[x.getAttribute('alt'),x.getAttribute('src'),x.getAttribute('title'),x.getAttribute('aria-label'),x.getAttribute('class')])].join(' ')");
+            var description=await c.EvaluateAsync<string>("e=>[e.innerText,e.getAttribute('title'),e.getAttribute('aria-label'),e.getAttribute('alt'),e.getAttribute('src'),e.getAttribute('href'),...Array.from(e.querySelectorAll('img')).flatMap(x=>[x.alt,x.getAttribute('src')])].join(' ')");
             if(Regex.IsMatch(description,extension=="pdf"?@"\b(pdf|ride)\b":@"\bxml\b",RegexOptions.IgnoreCase))matches.Add(c);
         }
         if(matches.Count>1)throw new InvalidDataException("Hay varias descargas del mismo formato en la fila.");return matches.SingleOrDefault();

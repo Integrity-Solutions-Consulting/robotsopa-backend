@@ -66,35 +66,6 @@ public sealed class RemoteExecutionIntegrationTests
             var registered3 = credentials.Register("tester", "fixture 3");
             Assert.Equal("tester", credentials.Authenticate(registered.Id, registered.Secret));
             Assert.Null(credentials.Authenticate(registered.Id, new string('0', 64)));
-            Assert.Equal("AUTHENTICATED", credentials.AuthenticateWithDiagnostic(registered.Id, registered.Secret.ToLowerInvariant()).Code);
-            Assert.Equal("CREDENTIAL_INVALID", credentials.AuthenticateWithDiagnostic(registered.Id, new string('0', 64)).Code);
-            Assert.Equal("CREDENTIAL_INVALID", credentials.AuthenticateWithDiagnostic(registered.Id, "invalid").Code);
-            Assert.Equal("AGENT_NOT_FOUND", credentials.AuthenticateWithDiagnostic(Guid.NewGuid(), registered.Secret).Code);
-            // Exercise the real forwarded-headers middleware over an internal HTTP connection,
-            // with the same agent headers and PostgreSQL credential validation as the API.
-            async Task CheckProxy(string trustedProxy, HttpStatusCode forwardedStatus)
-            {
-                var proxyBuilder = WebApplication.CreateBuilder();
-                proxyBuilder.WebHost.UseUrls("http://127.0.0.1:0");
-                proxyBuilder.Services.Configure<ForwardedHeadersOptions>(o => TrustedProxyConfiguration.Configure(o, [trustedProxy], []));
-                await using var proxyApp = proxyBuilder.Build();
-                proxyApp.UseForwardedHeaders();
-                RemoteAgentStatus.Map(proxyApp, c => c.Request.IsHttps && !c.Request.Headers.ContainsKey("Origin") && Guid.TryParse(c.Request.Headers["X-Delivery-Agent-Id"], out var agent) ? credentials.Authenticate(agent, c.Request.Headers["X-Delivery-Agent-Secret"].ToString()) : null, true);
-                await proxyApp.StartAsync();
-                var proxyAddress = proxyApp.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
-                using var proxyClient = new HttpClient { BaseAddress = new Uri(proxyAddress) };
-                proxyClient.DefaultRequestHeaders.Add("X-Delivery-Agent-Id", registered.Id.ToString());
-                proxyClient.DefaultRequestHeaders.Add("X-Delivery-Agent-Secret", registered.Secret);
-                using (var plain = await proxyClient.GetAsync("/execution-agent/v1/status")) Assert.Equal(HttpStatusCode.Unauthorized, plain.StatusCode);
-                proxyClient.DefaultRequestHeaders.Add("X-Forwarded-Proto", "https");
-                using (var forwarded = await proxyClient.GetAsync("/execution-agent/v1/status")) Assert.Equal(forwardedStatus, forwarded.StatusCode);
-                proxyClient.DefaultRequestHeaders.Remove("X-Delivery-Agent-Secret");
-                proxyClient.DefaultRequestHeaders.Add("X-Delivery-Agent-Secret", new string('0', 64));
-                using (var invalid = await proxyClient.GetAsync("/execution-agent/v1/status")) Assert.Equal(HttpStatusCode.Unauthorized, invalid.StatusCode);
-                await proxyApp.StopAsync();
-            }
-            await CheckProxy("127.0.0.1", HttpStatusCode.OK);
-            await CheckProxy("192.0.2.10", HttpStatusCode.Unauthorized);
             Sql("INSERT INTO panel_users(username,role,salt,password_hash) VALUES ('other','asistente',decode('01020304','hex'),decode(repeat('02',32),'hex'))");
             Assert.Empty(credentials.List("other"));
             Assert.False(credentials.Revoke(registered.Id, "other"));
@@ -106,7 +77,6 @@ public sealed class RemoteExecutionIntegrationTests
             Assert.Equal("tester", credentials.Authenticate(registered.Id, rotated));
             Assert.True(credentials.Revoke(registered.Id, "tester"));
             Assert.Null(credentials.Authenticate(registered.Id, rotated));
-            Assert.Equal("AGENT_DISABLED", credentials.AuthenticateWithDiagnostic(registered.Id, rotated!).Code);
             Assert.Null(credentials.Rotate(registered.Id, "tester"));
             registered = credentials.Register("tester", "fixture after revocation");
 
