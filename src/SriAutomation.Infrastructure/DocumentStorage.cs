@@ -111,8 +111,8 @@ public sealed class DocumentStorage : IStorageProvider
             used.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
             ws.Row(1).Style.Font.Bold = true; ws.Row(1).Style.Fill.BackgroundColor = XLColor.FromHtml("#15334D"); ws.Row(1).Style.Font.FontColor = XLColor.White;
             ws.Row(1).Height = 24;
-            ws.SheetView.FreezeRows(1); used.SetAutoFilter(); ws.Columns().AdjustToContents(12, 55);
-            foreach (var column in ws.ColumnsUsed()) column.Width = Math.Min(60, column.Width + 2);
+            ws.SheetView.FreezeRows(1); used.SetAutoFilter(); ws.Columns().AdjustToContents();
+            foreach (var column in ws.ColumnsUsed()) column.Width = Math.Min(60, Math.Max(12, column.Width + 2));
             for (var r = 2; r <= used.LastRow().RowNumber(); r++)
             {
                 ws.Row(r).Height = 20;
@@ -130,6 +130,7 @@ public sealed class DocumentStorage : IStorageProvider
         errors.Column(3).Style.Alignment.WrapText = true;
         for (var r = 2; r <= errors.LastRowUsed()!.RowNumber(); r++)
             errors.Row(r).Height = Math.Min(409, Math.Max(20, 15 * Math.Ceiling(errors.Cell(r, 3).GetString().Length / Math.Max(1, errors.Column(3).Width - 4))));
+        book.Worksheet("Documentos").Delete();
         MonthlyXmlReport.Add(book, rows, Resolve);
         var relative = Path.Combine(AccountDirectory(account), year.ToString("D4"), $"{month:D2}-{Months[month - 1]}", $"Resumen_{year:D4}_{month:D2}.xlsx");
         var path = Resolve(relative); var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";

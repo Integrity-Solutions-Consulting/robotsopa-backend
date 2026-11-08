@@ -41,7 +41,7 @@ public sealed class MonthlyXmlReportTests
             var path=storage.Resolve(storage.Report("account",2026,9,docs));
             using(var book=new XLWorkbook(path))
             {
-                foreach(var name in new[]{"Resumen","Facturas","Retenciones","Notas de crédito","Notas de débito","Liquidaciones","Productos y motivos","Impuestos y retenciones"})Assert.True(book.Worksheet(name).AutoFilter.IsEnabled);
+                foreach(var name in new[]{"Resumen","Facturas","Retenciones","Notas de crédito","Notas de débito","Liquidaciones de compra","Productos y motivos","Impuestos y retenciones"})Assert.True(book.Worksheet(name).AutoFilter.IsEnabled);
                 Assert.Equal(XLDataType.DateTime,book.Worksheet("Resumen").Cell(2,4).DataType);Assert.Equal(XLDataType.Text,book.Worksheet("Resumen").Cell(2,3).DataType);
                 Assert.Equal(0m,book.Worksheet("Productos y motivos").Cell(2,9).GetValue<decimal>());
             }
@@ -58,8 +58,8 @@ public sealed class MonthlyXmlReportTests
     [InlineData("notaCredito", "infoNotaCredito", "Notas-Credito", "Notas de crédito", "valorModificacion", "1.0.0")]
     [InlineData("notaCredito", "infoNotaCredito", "Notas-Credito", "Notas de crédito", "valorModificacion", "1.1.0")]
     [InlineData("notaDebito", "infoNotaDebito", "Notas-Debito", "Notas de débito", "valorTotal", "1.0.0")]
-    [InlineData("liquidacionCompra", "infoLiquidacionCompra", "Liquidaciones", "Liquidaciones", "importeTotal", "1.0.0")]
-    [InlineData("liquidacionCompra", "infoLiquidacionCompra", "Liquidaciones", "Liquidaciones", "importeTotal", "1.1.0")]
+    [InlineData("liquidacionCompra", "infoLiquidacionCompra", "Liquidaciones", "Liquidaciones de compra", "importeTotal", "1.0.0")]
+    [InlineData("liquidacionCompra", "infoLiquidacionCompra", "Liquidaciones", "Liquidaciones de compra", "importeTotal", "1.1.0")]
     [InlineData("comprobanteRetencion", "infoCompRetencion", "Retenciones", "Retenciones", "importeTotal", "1.0.0")]
     [InlineData("comprobanteRetencion", "infoCompRetencion", "Retenciones", "Retenciones", "importeTotal", "2.0.0")]
     public void ReportReadsStoredXmlAndKeepsRepeatedAmounts(string root, string info, string type, string sheetName, string totalTag, string version)
@@ -79,12 +79,9 @@ public sealed class MonthlyXmlReportTests
             using(var book=new XLWorkbook(storage.Resolve(path)))
             {
                 Assert.Equal(2,book.Worksheet("Resumen").LastRowUsed()!.RowNumber());
-                Assert.Equal(version,book.Worksheet(sheetName).Cell(2,12).GetString());
+                Assert.False(book.Worksheets.Any(w => w.Name == "Detalle XML" || w.Name == "Documentos"));
                 Assert.Equal(XLDataType.DateTime,book.Worksheet("Resumen").Cell(2,4).DataType);
                 Assert.Equal(XLDataType.Text,book.Worksheet("Resumen").Cell(2,3).DataType);
-                var details=book.Worksheet("Detalle XML");
-                Assert.Equal(2,details.RowsUsed().Skip(1).Count(r=>r.Cell(3).GetString().EndsWith("/valorRetenido[1]")));
-                Assert.Contains(details.RowsUsed().Skip(1),r=>r.Cell(3).GetString().Contains("detalle[2]/descuento") && r.Cell(4).DataType==XLDataType.Number && r.Cell(4).GetDouble()==0);
                 if(type=="Retenciones")Assert.Equal(3m,book.Worksheet("Resumen").Cell(2,10).GetValue<decimal>());
                 else Assert.Equal(11.5m,book.Worksheet("Resumen").Cell(2,10).GetValue<decimal>());
             }
@@ -101,11 +98,11 @@ public sealed class MonthlyXmlReportTests
             var xml="<factura version='1.0.0'><infoTributaria><claveAcceso>123</claveAcceso></infoTributaria><infoFactura><fechaEmision>12/09/2026</fechaEmision><importeTotal>0.00</importeTotal></infoFactura></factura>";
             var storage=new DocumentStorage(dir);var d=new XmlDocumentParser().ParseXml("account",Encoding.UTF8.GetBytes(xml));
             var report=storage.Report("account",2026,9,[d]);
-            using(var book=new XLWorkbook(storage.Resolve(report)))Assert.Equal("No disponible",book.Worksheet("Resumen").Cell(2,11).GetString());
+            using(var book=new XLWorkbook(storage.Resolve(report))) Assert.Equal(14, book.Worksheet("Resumen").LastColumnUsed()!.ColumnNumber());
             d.XmlPath=storage.Save(d,"xml",Encoding.UTF8.GetBytes(xml));storage.Report("account",2026,9,[d]);
-            using(var book=new XLWorkbook(storage.Resolve(report))) { Assert.Equal("Disponible",book.Worksheet("Resumen").Cell(2,11).GetString()); Assert.Equal(0m,book.Worksheet("Resumen").Cell(2,10).GetValue<decimal>()); Assert.Equal("No consta en XML",book.Worksheet("Facturas").Cell(2,13).GetString()); }
+            using(var book=new XLWorkbook(storage.Resolve(report))) {  Assert.Equal(0m,book.Worksheet("Resumen").Cell(2,10).GetValue<decimal>()); Assert.Equal("No consta en XML",book.Worksheet("Facturas").Cell(2,15).GetString()); }
             File.WriteAllText(storage.Resolve(d.XmlPath),"<broken");storage.Report("account",2026,9,[d]);
-            using(var book=new XLWorkbook(storage.Resolve(report)))Assert.Equal("XML inválido",book.Worksheet("Resumen").Cell(2,11).GetString());
+            using(var book=new XLWorkbook(storage.Resolve(report))) Assert.Equal(14, book.Worksheet("Resumen").LastColumnUsed()!.ColumnNumber());
         }
         finally { if(Directory.Exists(dir)) Directory.Delete(dir,true); }
     }
@@ -121,9 +118,9 @@ public sealed class MonthlyXmlReportTests
             d.XmlSha256=DownloadPipeline.Hash(bytes);d.XmlPath=Path.Combine(".objects",d.XmlSha256[..2],d.XmlSha256+".xml");
             var path=storage.Resolve(d.XmlPath);Directory.CreateDirectory(Path.GetDirectoryName(path)!);File.WriteAllBytes(path,bytes);
             var report=storage.Report("account",2026,9,[d]);
-            using(var book=new XLWorkbook(storage.Resolve(report))) { Assert.Equal("Disponible",book.Worksheet("Resumen").Cell(2,11).GetString());Assert.Equal("000123",book.Worksheet("Resumen").Cell(2,7).GetString()); }
+            using(var book=new XLWorkbook(storage.Resolve(report))) { Assert.Equal("000123",book.Worksheet("Resumen").Cell(2,7).GetString()); }
             d.XmlSha256=new string('0',64);storage.Report("account",2026,9,[d]);
-            using(var book=new XLWorkbook(storage.Resolve(report)))Assert.Equal("Integridad no confirmada",book.Worksheet("Resumen").Cell(2,11).GetString());
+            using(var book=new XLWorkbook(storage.Resolve(report))) Assert.Equal("No disponible", book.Worksheet("Facturas").Cell(2,15).GetString());
             Assert.Equal(bytes,File.ReadAllBytes(path));
         }
         finally { if(Directory.Exists(dir)) Directory.Delete(dir,true); }

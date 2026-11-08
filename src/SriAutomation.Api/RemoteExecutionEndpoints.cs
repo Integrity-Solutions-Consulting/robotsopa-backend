@@ -102,7 +102,15 @@ public static class RemoteExecutionEndpoints
             if (available)
             {
                 // UpdateOwned also creates a delivery if one does not yet exist for this user.
-                scoped.Update(_ => true);
+                scoped.Update(s => {
+                    var job = s.Executions.Single(e => e.Id == id);
+                    if (doc.Issued >= job.Query.From && doc.Issued <= job.Query.To && job.Query.Types.Contains(doc.Type))
+                    {
+                        if (!job.AttemptedKeys.Contains(doc.AccessKey)) job.AttemptedKeys.Add(doc.AccessKey);
+                        ReviewCounter.Update(s, job);
+                    }
+                    return true;
+                });
                 var hash = extension == "xml" ? doc.XmlSha256 : doc.PdfSha256;
                 if (hash is not null) new RemoteDeliveryStore(connection).Requeue(Identity(c)!, doc.Id, extension, hash);
             }

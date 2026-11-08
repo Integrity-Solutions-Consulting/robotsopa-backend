@@ -18,9 +18,9 @@ internal static class MonthlyXmlReport
         ["Retenciones"] = ("Retenciones", "infoCompRetencion", [new("Período fiscal", "infoCompRetencion", "periodoFiscal"), new("Tipo identificación retenido", "infoCompRetencion", "tipoIdentificacionSujetoRetenido"), new("Parte relacionada", "infoCompRetencion", "parteRel"), new("Contribuyente especial", "infoCompRetencion", "contribuyenteEspecial")]),
         ["Notas-Credito"] = ("Notas de crédito", "infoNotaCredito", [new("Documento modificado", "infoNotaCredito", "codDocModificado"), new("Número modificado", "infoNotaCredito", "numDocModificado"), new("Fecha documento modificado", "infoNotaCredito", "fechaEmisionDocSustento"), new("Motivo", "infoNotaCredito", "motivo"), new("Total sin impuestos", "infoNotaCredito", "totalSinImpuestos", true), new("Valor modificación", "infoNotaCredito", "valorModificacion", true), new("Moneda", "infoNotaCredito", "moneda")]),
         ["Notas-Debito"] = ("Notas de débito", "infoNotaDebito", [new("Documento modificado", "infoNotaDebito", "codDocModificado"), new("Número modificado", "infoNotaDebito", "numDocModificado"), new("Fecha documento modificado", "infoNotaDebito", "fechaEmisionDocSustento"), new("Total sin impuestos", "infoNotaDebito", "totalSinImpuestos", true), new("Valor total", "infoNotaDebito", "valorTotal", true)]),
-        ["Liquidaciones"] = ("Liquidaciones", "infoLiquidacionCompra", [new("Dirección establecimiento", "infoLiquidacionCompra", "dirEstablecimiento"), new("Total sin impuestos", "infoLiquidacionCompra", "totalSinImpuestos", true), new("Total descuento", "infoLiquidacionCompra", "totalDescuento", true), new("Importe total", "infoLiquidacionCompra", "importeTotal", true), new("Moneda", "infoLiquidacionCompra", "moneda")])
+        ["Liquidaciones"] = ("Liquidaciones de compra", "infoLiquidacionCompra", [new("Dirección establecimiento", "infoLiquidacionCompra", "dirEstablecimiento"), new("Total sin impuestos", "infoLiquidacionCompra", "totalSinImpuestos", true), new("Total descuento", "infoLiquidacionCompra", "totalDescuento", true), new("Importe total", "infoLiquidacionCompra", "importeTotal", true), new("Moneda", "infoLiquidacionCompra", "moneda")])
     };
-    private static readonly string[] Common = ["Tipo", "Número", "Clave de acceso", "Fecha de emisión", "Razón social", "Identificación", "Autorización", "Subtotal", "Impuestos", "Total", "Estado XML", "Versión XML"];
+    private static readonly string[] Common = ["Tipo", "Número", "Clave de acceso", "Fecha de emisión", "Razón social receptor", "Identificación receptor", "Autorización", "Subtotal", "Impuestos", "Total", "Razón social emisor", "RUC emisor", "Descuento", "Fecha de autorización"];
     private static readonly HashSet<string> Numeric = new(StringComparer.Ordinal) { "cantidad", "precioUnitario", "precioSinSubsidio", "descuento", "precioTotalSinImpuesto", "baseImponible", "tarifa", "valor", "valorRetenido", "porcentajeRetener", "porcentaje", "totalSinImpuestos", "totalDescuento", "importeTotal", "valorTotal", "valorModificacion", "propina" };
     private sealed record XmlState(string Status, XElement? Root, Voucher? Parsed = null);
 
@@ -28,10 +28,9 @@ internal static class MonthlyXmlReport
     {
         book.Worksheet("Resumen").Name = "Totales";
         var summary = book.AddWorksheet("Resumen"); summary.Position = 1;
-        var details = book.AddWorksheet("Detalle XML");
         var lines = book.AddWorksheet("Productos y motivos");
         var taxes = book.AddWorksheet("Impuestos y retenciones");
-        Headers(summary, Common); Headers(details, ["Tipo", "Clave de acceso", "Ruta XML (índices desde 1)", "Valor"]);
+        Headers(summary, Common);
         Headers(lines, ["Tipo", "Clave de acceso", "Número de línea", "Código principal", "Código auxiliar", "Descripción o motivo", "Cantidad", "Precio unitario", "Descuento", "Subtotal sin impuestos", "Valor motivo"]);
         Headers(taxes, ["Tipo", "Clave de acceso", "Origen", "Número de línea", "Documento sustento (tipo)", "Documento sustento (número)", "Código impuesto", "Código porcentaje o retención", "Tarifa o porcentaje", "Base imponible", "Valor impuesto", "Valor retenido"]);
         var sheets = new Dictionary<string,IXLWorksheet>();
@@ -42,7 +41,7 @@ internal static class MonthlyXmlReport
             var ws = book.AddWorksheet(sheetName); sheets[group.Key] = ws;
             Headers(ws, Common.Concat(spec.Fields?.Select(f => f.Header) ?? []).ToArray());
         }
-        var sr = 2; var dr = 2; var lr = 2; var tr = 2; var totals = new Dictionary<string,List<decimal?>>();
+        var sr = 2; var lr = 2; var tr = 2; var totals = new Dictionary<string,List<decimal?>>();
         foreach (var d in rows)
         {
             var xml = ReadXml(d, resolve);
@@ -83,21 +82,7 @@ internal static class MonthlyXmlReport
                     ElementNumber(taxes.Cell(row, 9), tax, tax.Elements().Any(e => e.Name.LocalName == "porcentajeRetener") ? "porcentajeRetener" : "tarifa");
                     ElementNumber(taxes.Cell(row, 10), tax, "baseImponible"); ElementNumber(taxes.Cell(row, 11), tax, tax.Name.LocalName == "impuestoDocSustento" ? "valorImpuesto" : "valor"); ElementNumber(taxes.Cell(row, 12), tax, "valorRetenido");
                 }
-                void Walk(XElement element, string path)
-                {
-                    if (element.Name.LocalName == "Signature") return;
-                    var children = element.Elements().ToList();
-                    if (children.Count == 0)
-                    {
-                        details.Cell(dr, 1).Value = d.Type; Text(details.Cell(dr, 2), d.AccessKey); details.Cell(dr, 3).Value = path;
-                        var cell = details.Cell(dr++, 4); var value = element.Value;
-                        if (Numeric.Contains(element.Name.LocalName) && decimal.TryParse(value, NumberStyles.AllowDecimalPoint | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out var amount)) { cell.Value = amount; cell.Style.NumberFormat.Format = "#,##0.00######"; }
-                        else Text(cell, value);
-                        return;
-                    }
-                    foreach (var child in children) Walk(child, path + "/" + child.Name.LocalName + "[" + (child.ElementsBeforeSelf(child.Name).Count() + 1) + "]");
-                }
-                Walk(xml.Root, "/" + xml.Root.Name.LocalName + "[1]");
+
             }
         }
         var totalSheet = book.Worksheet("Totales");
@@ -108,7 +93,7 @@ internal static class MonthlyXmlReport
             else totalSheet.Cell(row, 3).Clear();
             totalSheet.Cell(row, 4).Value = values.Count(v => !v.HasValue);
         }
-        Format(summary); Format(details); Format(lines); Format(taxes); foreach (var ws in sheets.Values) Format(ws);
+        Format(summary); Format(lines); Format(taxes); foreach (var ws in sheets.Values) Format(ws);
     }
     private static XmlState ReadXml(Voucher d, Func<string,string> resolve)
     {
@@ -151,7 +136,12 @@ internal static class MonthlyXmlReport
         ws.Cell(row, 4).Value = d.Issued.ToDateTime(TimeOnly.MinValue); ws.Cell(row, 4).Style.DateFormat.Format = "dd/mm/yyyy";
         Text(ws.Cell(row, 5), parsed?.Recipient ?? d.Recipient); Text(ws.Cell(row, 6), parsed?.Identification ?? d.Identification); Text(ws.Cell(row, 7), parsed?.Authorization ?? d.Authorization);
         Amount(ws.Cell(row, 8), parsed?.Subtotal ?? d.Subtotal); Amount(ws.Cell(row, 9), parsed?.Taxes ?? d.Taxes); Amount(ws.Cell(row, 10), parsed?.Total ?? d.Total);
-        Text(ws.Cell(row, 11), xml.Status); Text(ws.Cell(row, 12), xml.Root?.Attribute("version")?.Value);
+        Text(ws.Cell(row, 11), parsed?.IssuerName ?? d.IssuerName); Text(ws.Cell(row, 12), parsed?.IssuerTaxId ?? d.IssuerTaxId);
+        Amount(ws.Cell(row, 13), parsed?.Discount ?? d.Discount);
+        var authorizedAt = parsed?.AuthorizedAt ?? d.AuthorizedAt;
+        if (DateTimeOffset.TryParse(authorizedAt, CultureInfo.InvariantCulture, DateTimeStyles.None, out var date))
+        { ws.Cell(row, 14).Value = date.DateTime; ws.Cell(row, 14).Style.DateFormat.Format = "dd/mm/yyyy hh:mm:ss"; }
+        else Text(ws.Cell(row, 14), authorizedAt);
     }
     private static void WriteField(IXLCell cell, XmlState xml, Field field)
     {
@@ -167,7 +157,7 @@ internal static class MonthlyXmlReport
     {
         var used = ws.RangeUsed()!; used.Style.Font.FontName = "Calibri"; used.Style.Font.FontSize = 11;
         ws.Row(1).Style.Font.Bold = true; ws.Row(1).Style.Fill.BackgroundColor = XLColor.FromHtml("#15334D"); ws.Row(1).Style.Font.FontColor = XLColor.White;
-        ws.Row(1).Height = 24; ws.SheetView.FreezeRows(1); used.SetAutoFilter(); ws.Columns().AdjustToContents(12, 55);
-        foreach (var column in ws.ColumnsUsed()) column.Width = Math.Min(60, column.Width + 2);
+        ws.Row(1).Height = 30; ws.Row(1).Style.Alignment.WrapText = true; ws.SheetView.FreezeRows(1); used.SetAutoFilter(); ws.Columns().AdjustToContents();
+        foreach (var column in ws.ColumnsUsed()) column.Width = Math.Min(60, Math.Max(12, column.Width + 2));
     }
 }

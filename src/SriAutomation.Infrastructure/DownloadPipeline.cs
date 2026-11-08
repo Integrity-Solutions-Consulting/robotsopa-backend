@@ -35,6 +35,8 @@ public sealed class DownloadPipeline(IStateRepository repository, IStorageProvid
             var pdfText = PdfVoucherParser.ReadText(download.Pdf);
             var pdfKey = PdfVoucherParser.AccessKey(pdfText);
             if (pdfKey is not null && pdfKey != document.AccessKey) throw new ArgumentException("PDF y XML pertenecen a comprobantes diferentes.");
+            if (download.Xml is not null && (Conflicts(document.IssuerTaxId, parsedPdf.IssuerTaxId) || Conflicts(document.Number, parsedPdf.Number) || Conflicts(document.Authorization, parsedPdf.Authorization)))
+                throw new ArgumentException("La identidad del PDF no coincide con el XML.");
             if (new PdfInspector().Check(download.Pdf, document.AccessKey) is { } warning) { document.Status = "Revisar"; document.Warning = string.Join(" ", document.Warning, warning); }
         }
         document.Source = "Sri";
@@ -53,6 +55,7 @@ public sealed class DownloadPipeline(IStateRepository repository, IStorageProvid
             else if (key != previous.AccessKey || Conflicts(previous.IssuerTaxId, parsedPdf!.IssuerTaxId) || Conflicts(previous.Number, parsedPdf.Number) || Conflicts(previous.Authorization, parsedPdf.Authorization))
                 throw new ArgumentException("La identidad del PDF difiere del comprobante histórico.");
         }
+        AccountingReconciliation.Merge(document, download.Xml is not null, previous, parsedPdf);
         stage?.Invoke("Publish");
         if (download.Xml is not null) { document.XmlPath = Save("xml", download.Xml); document.XmlSha256 = Hash(download.Xml); }
         if (download.Pdf is not null) { document.PdfPath = Save("pdf", download.Pdf); document.PdfSha256 = Hash(download.Pdf); }
@@ -60,7 +63,7 @@ public sealed class DownloadPipeline(IStateRepository repository, IStorageProvid
         return repository.Update(s =>
         {
             var existing = s.Documents.SingleOrDefault(d => d.Account == document.Account && d.Type == document.Type && d.AccessKey == document.AccessKey);
-            if (existing is null) { s.Documents.Add(document); return document; }
+            if (existing is null) { s.Documents.Add(document); UpdateReviews(s, document); return document; }
             if (existing.Issued != document.Issued) throw new ArgumentException("La fecha histórica no coincide con el documento.");
             if (existing.XmlSha256 is not null && document.XmlSha256 is not null && existing.XmlSha256 != document.XmlSha256) throw new ArgumentException("Colisión de integridad en el manifiesto.");
             if (existing.PdfSha256 is not null && document.PdfSha256 is not null && existing.PdfSha256 != document.PdfSha256)
@@ -87,13 +90,17 @@ public sealed class DownloadPipeline(IStateRepository repository, IStorageProvid
             document.Total ??= existing.Total;
             document.XmlPath ??= existing.XmlPath; document.XmlSha256 ??= existing.XmlSha256;
             document.PdfPath ??= existing.PdfPath; document.PdfSha256 ??= existing.PdfSha256;
-            if (download.Xml is null && existing.XmlPath is not null)
-            { existing.PdfPath = document.PdfPath; existing.PdfSha256 = document.PdfSha256; existing.PdfGeneration = document.PdfGeneration; existing.Status = "Revisar"; existing.Warning = "PDF incorporado a XML existente; revisar conciliación."; return existing; }
-            s.Documents[s.Documents.IndexOf(existing)] = document; return document;
+            s.Documents[s.Documents.IndexOf(existing)] = document; UpdateReviews(s, document); return document;
         });
         string Save(string extension, byte[] bytes) => ownedContent is null
             ? storage.Save(document, extension, bytes)
             : ownedContent.Publish(bytes, extension, (_, path, _) => path);
+    }
+    private void UpdateReviews(State state, Voucher document)
+    {
+        var ownedId = (repository as OwnedStateRepository)?.Ownership.JobId;
+        foreach (var job in state.Executions.Where(e => (ownedId == null || e.Id == ownedId) && e.Status == "Running" && e.Query.Account == document.Account && e.AttemptedKeys.Contains(document.AccessKey)))
+            ReviewCounter.Update(state, job);
     }
     private static bool Conflicts(string? left, string? right) => !string.IsNullOrWhiteSpace(left) && !string.IsNullOrWhiteSpace(right) && !string.Equals(left, right, StringComparison.Ordinal);
     private static void QueueUploads(State state, Voucher document, Account account, DownloadedVoucher download)

@@ -86,8 +86,9 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                             if (needPdf && pdf is null) transferIssues.Add("PDF no disponible; documento parcial.");
                             if (transferIssues.Count > 0)
                             {
-                                repository.Update(s => { var d = s.Documents.Single(d => d.Id == document.Id); d.Status = "Revisar"; d.Warning = string.Join(" ", d.Warning, string.Join(" ", transferIssues)); return true; });
+                                repository.Update(s => { var e = s.Executions.Single(e => e.Id == execution.Id); e.Issues.Add($"{date:yyyy-MM-dd} · {type} · fila {rowIndex + 1}: no se obtuvieron todos los archivos solicitados."); return true; });
                                 errors++;
+                                repository.Update(s => { s.Executions.Single(e => e.Id == execution.Id).Errors++; return true; });
                             }
                             downloadedCount++;
                             repository.Update(s => { var e = s.Executions.Single(e => e.Id == execution.Id); e.Downloaded++; e.Processed++; return true; });

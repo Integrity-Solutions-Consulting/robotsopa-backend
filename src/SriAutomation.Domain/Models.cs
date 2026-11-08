@@ -20,6 +20,7 @@ public sealed class Execution
     public int Processed { get; set; }
     public int Found { get; set; }
     public int Errors { get; set; }
+    public int Reviews { get; set; }
     public int Attempts { get; set; }
     public string? Checkpoint { get; set; }
     public string? Message { get; set; }
@@ -42,6 +43,7 @@ public sealed class Voucher
     public string Type { get; set; } = "";
     public string AccessKey { get; set; } = "";
     public string? IssuerTaxId { get; set; }
+    public string? IssuerName { get; set; }
     public string? Number { get; set; }
     public string? Authorization { get; set; }
     public string? AuthorizedAt { get; set; }
@@ -49,12 +51,14 @@ public sealed class Voucher
     public string? Identification { get; set; }
     public DateOnly Issued { get; set; }
     public decimal? Subtotal { get; set; }
+    public decimal? Discount { get; set; }
     public decimal? Taxes { get; set; }
     public decimal? Total { get; set; }
     public string? PdfPath { get; set; }
     public string? XmlPath { get; set; }
     public string Status { get; set; } = "Pendiente";
     public string? Warning { get; set; }
+    public Dictionary<string, FieldEvidence> FieldEvidence { get; set; } = new();
     public string Source { get; set; } = "Imported";
     public string? XmlSha256 { get; set; }
     public string? PdfSha256 { get; set; }
@@ -62,6 +66,7 @@ public sealed class Voucher
     public long XmlGeneration { get; set; } = 1;
     public List<PdfVersion> PdfHistory { get; set; } = [];
 }
+public sealed record FieldEvidence(string Source, string Confidence);
 public sealed record PdfVersion(string Path, string Sha256, DateTimeOffset ReplacedAt);
 public sealed record SriCheckpoint(DateOnly Date, string Type, int Page, int Row, bool Complete = false);
 public sealed record QueryResult(DateOnly Date, string Type, int Found, int Downloaded, int Errors, string Status);
