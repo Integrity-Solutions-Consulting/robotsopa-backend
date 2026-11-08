@@ -91,7 +91,7 @@ public sealed class CoreTests : IDisposable
         var path = Storage.Report(account, 2026, 9, [d, d, other]);
         Storage.Report(account, 2026, 9, [d]); // Regeneración atómica.
         using var book = new XLWorkbook(Storage.Resolve(path));
-        Assert.Equal(3, book.Worksheets.Count); var sheet = book.Worksheet("Documentos");
+        Assert.True(book.Worksheets.Count >= 5); var sheet = book.Worksheet("Documentos");
         Assert.Equal(2, sheet.LastRowUsed()!.RowNumber()); Assert.Equal(8, sheet.LastColumnUsed()!.ColumnNumber()); Assert.Equal(XLDataType.Number, sheet.Cell(2, 8).DataType);
         Assert.Equal("0012345678", sheet.Cell(2, 6).GetString()); Assert.Equal(11.50m, sheet.Cell(2, 8).GetValue<decimal>());
         Assert.DoesNotContain(sheet.Row(1).CellsUsed(), c => c.GetString() is "Clave de acceso" or "Ruta PDF" or "Ruta XML" or "Estado de extracción");

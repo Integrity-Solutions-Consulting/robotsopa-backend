@@ -71,7 +71,7 @@ public sealed class DocumentStorage : IStorageProvider
         Directory.CreateDirectory(Path.GetDirectoryName(directory)!);
         using var gate = new FileStream(directory + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         var rows = documents.Where(d => d.Account == account && d.Issued.Year == year && d.Issued.Month == month)
-            .DistinctBy(d => (d.Type, d.AccessKey)).OrderBy(d => d.Issued).ThenBy(d => d.Number).ToList();
+            .DistinctBy(d => (d.Type, Key: string.IsNullOrWhiteSpace(d.AccessKey) ? "id:" + d.Id : "key:" + d.AccessKey)).OrderBy(d => d.Issued).ThenBy(d => d.Number).ToList();
         using var book = new XLWorkbook();
         var sheet = book.AddWorksheet("Documentos");
         string[] headers = ["Tipo de comprobante", "Número de documento", "Número de autorización", "Fecha y hora de autorización", "Razón social", "Identificación", "Subtotal", "Total"];
@@ -130,6 +130,7 @@ public sealed class DocumentStorage : IStorageProvider
         errors.Column(3).Style.Alignment.WrapText = true;
         for (var r = 2; r <= errors.LastRowUsed()!.RowNumber(); r++)
             errors.Row(r).Height = Math.Min(409, Math.Max(20, 15 * Math.Ceiling(errors.Cell(r, 3).GetString().Length / Math.Max(1, errors.Column(3).Width - 4))));
+        MonthlyXmlReport.Add(book, rows, Resolve);
         var relative = Path.Combine(AccountDirectory(account), year.ToString("D4"), $"{month:D2}-{Months[month - 1]}", $"Resumen_{year:D4}_{month:D2}.xlsx");
         var path = Resolve(relative); var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try

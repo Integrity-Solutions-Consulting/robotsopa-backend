@@ -21,7 +21,7 @@ public sealed class FrontendOperationsTests
         await page.CloseAsync();Assert.True(page.IsClosed);
         JsonElement job=default;for(var i=0;i<30;i++){var result=await context.APIRequest.GetAsync("http://localhost:3000/api/v1/executions/"+jobId);job=(await result.JsonAsync())!.Value;if(job.GetProperty("status").GetString() is not "Pending" and not "Running")break;await Task.Delay(1000);}
         Assert.Equal("Completed",job.GetProperty("status").GetString());Assert.False(job.GetProperty("cancelRequested").GetBoolean());Assert.Equal(1,job.GetProperty("reports").GetArrayLength());
-        var report=await context.APIRequest.GetAsync("http://localhost:3000/api/v1/reports/"+id+"/2026/9");Assert.True(report.Ok);using var book=new XLWorkbook(new MemoryStream(await report.BodyAsync()));Assert.Equal(3,book.Worksheets.Count);Assert.Equal("0012345678",book.Worksheet("Documentos").Cell(2,5).GetString());
+        var report=await context.APIRequest.GetAsync("http://localhost:3000/api/v1/reports/"+id+"/2026/9");Assert.True(report.Ok);using var book=new XLWorkbook(new MemoryStream(await report.BodyAsync()));Assert.True(book.Worksheets.Count >= 5);Assert.Equal("0012345678",book.Worksheet("Documentos").Cell(2,5).GetString());
     }
     [LocalStackFact]
     public async Task DownloadWaitsForManualLoginAndReadyDoesNotClaimSuccess()
@@ -143,7 +143,7 @@ public sealed class FrontendOperationsTests
         await page.GetByRole(AriaRole.Button,new(){Name="Generar / actualizar mes",Exact=true}).ClickAsync();
         var download=await page.RunAndWaitForDownloadAsync(()=>page.GetByRole(AriaRole.Link,new(){Name="Descargar Excel 2026-10",Exact=true}).ClickAsync());Assert.Null(await download.FailureAsync());
         var artifacts=Path.Combine(root,"test-artifacts");Directory.CreateDirectory(artifacts);var report=Path.Combine(artifacts,"simplified-qa.xlsx");await download.SaveAsAsync(report);
-        using(var book=new XLWorkbook(report)){Assert.Equal(3,book.Worksheets.Count);Assert.Equal("0012345678",book.Worksheet("Documentos").Cell(2,5).GetString());Assert.Equal(11.5m,book.Worksheet("Documentos").Cell(2,9).GetValue<decimal>());}
+        using(var book=new XLWorkbook(report)){Assert.True(book.Worksheets.Count >= 5);Assert.Equal("0012345678",book.Worksheet("Documentos").Cell(2,5).GetString());Assert.Equal(11.5m,book.Worksheet("Documentos").Cell(2,9).GetValue<decimal>());}
         var output=File.ReadLines(Path.Combine(root,".env")).Single(l=>l.StartsWith("SRI_OUTPUT_HOST_PATH=")).Split('=',2)[1].Trim('"','\'');Assert.Equal(xml,File.ReadAllBytes(Path.Combine(output,doc.XmlPath!)));Assert.Equal(pdf,File.ReadAllBytes(Path.Combine(output,doc.XmlPath!.Replace(".xml",".pdf"))));
         await page.ScreenshotAsync(new(){Path=Path.Combine(artifacts,"comprobantes-unificados.png"),FullPage=true});
         await tools.GetByRole(AriaRole.Button,new(){Name="Descargar comprobantes",Exact=true}).ClickAsync();form=page.Locator("app-query-form");await form.GetByLabel("Cuenta SRI").SelectOptionAsync(id);

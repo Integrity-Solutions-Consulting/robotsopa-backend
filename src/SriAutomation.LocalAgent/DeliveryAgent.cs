@@ -37,6 +37,7 @@ internal static class DeliveryAgent
     internal static async Task PollOnce(HttpClient client, string root, string lockPath, CancellationToken cancellation)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(lockPath)!);
+        HideDeliveryState(root);
         // Serializa también con el agente de entrega instalado anteriormente.
         using var gate = new FileStream(lockPath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         var pending = await client.GetFromJsonAsync<PendingRemoteDelivery[]>("/delivery-agent/v1/pending", cancellation) ?? [];
@@ -87,6 +88,7 @@ internal static class DeliveryAgent
         var key = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(item.DestinationPath)));
         var directory = Path.Combine(root, ".delivery-state");
         Directory.CreateDirectory(directory);
+        HideDeliveryState(root);
         var path = Path.Combine(directory, key + ".json");
         if (File.Exists(path))
         {
@@ -101,6 +103,16 @@ internal static class DeliveryAgent
             File.Move(temporary, path, true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
+    }
+    internal static void HideDeliveryState(string root)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var directory = Path.Combine(root, ".delivery-state");
+        try
+        {
+            if (Directory.Exists(directory)) File.SetAttributes(directory, File.GetAttributes(directory) | FileAttributes.Hidden);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException) { /* Presentation must never block deliveries. */ }
     }
     private sealed record DeliveryGeneration(long Generation, string Sha256);
 }
