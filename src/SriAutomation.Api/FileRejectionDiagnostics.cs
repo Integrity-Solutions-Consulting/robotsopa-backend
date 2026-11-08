@@ -14,6 +14,8 @@ public static class FileRejectionDiagnostics
         ArgumentException when ex.Message == "El emisor del XML no corresponde a la cuenta seleccionada." => "ISSUER_ACCOUNT_MISMATCH",
         ArgumentException when ex.Message == "PDF y XML pertenecen a comprobantes diferentes." => "PDF_XML_KEY_MISMATCH",
         ArgumentException when ex.Message == "El documento no coincide con la clave, tipo o emisión de la fila consultada." => "DOCUMENT_ROW_MISMATCH",
+        ArgumentException when ex.Message == "No se pudo demostrar la identidad del PDF diferente." => "PDF_IDENTITY_UNPROVEN",
+        ArgumentException when ex.Message == "La identidad del PDF difiere del comprobante histórico." => "PDF_HISTORICAL_IDENTITY_MISMATCH",
         ArgumentException when ex.Message == "Colisión de integridad en el manifiesto." => "HISTORICAL_HASH_MISMATCH",
         ArgumentException when ex.Message == "Cuenta no registrada." => "ACCOUNT_NOT_REGISTERED",
         ArgumentException when ex.Message == "No hay archivos disponibles para este comprobante." => "NO_FILE",

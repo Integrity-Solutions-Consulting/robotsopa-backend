@@ -98,7 +98,15 @@ public static class RemoteExecutionEndpoints
             if (extension is not ("xml" or "pdf")) throw new ArgumentException("Formato inválido.");
             var owner = Owner(c, id); var scoped = new OwnedStateRepository(repository, owner); scoped.VerifyOwnership();
             var doc = scoped.Read(s => { var job = s.Executions.Single(e => e.Id == id); return s.Documents.Single(d => d.Id == document && d.Account == job.Query.Account); });
-            return Results.Ok(new DownloadPipeline(scoped, storage, parser, new OwnedContentStore(storage, scoped, owner)).IsAvailable(doc, extension));
+            var available = new DownloadPipeline(scoped, storage, parser, new OwnedContentStore(storage, scoped, owner)).IsAvailable(doc, extension);
+            if (available)
+            {
+                // UpdateOwned also creates a delivery if one does not yet exist for this user.
+                scoped.Update(_ => true);
+                var hash = extension == "xml" ? doc.XmlSha256 : doc.PdfSha256;
+                if (hash is not null) new RemoteDeliveryStore(connection).Requeue(Identity(c)!, doc.Id, extension, hash);
+            }
+            return Results.Ok(available);
         });
         group.MapPost("/{id}/files", (HttpContext c, string id, DownloadedVoucher file, IStorageProvider storage, IDocumentParser parser) =>
         {

@@ -58,7 +58,11 @@ public sealed class Voucher
     public string Source { get; set; } = "Imported";
     public string? XmlSha256 { get; set; }
     public string? PdfSha256 { get; set; }
+    public long PdfGeneration { get; set; } = 1;
+    public long XmlGeneration { get; set; } = 1;
+    public List<PdfVersion> PdfHistory { get; set; } = [];
 }
+public sealed record PdfVersion(string Path, string Sha256, DateTimeOffset ReplacedAt);
 public sealed record SriCheckpoint(DateOnly Date, string Type, int Page, int Row, bool Complete = false);
 public sealed record QueryResult(DateOnly Date, string Type, int Found, int Downloaded, int Errors, string Status);
 public sealed class LocalDelivery

@@ -3,6 +3,7 @@
     <OutputType>WinExe</OutputType><TargetFramework>net10.0-windows</TargetFramework>
     <UseWPF>true</UseWPF><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable>
     <AssemblyName>Bot</AssemblyName>
+    <Version>1.0.5</Version>
   </PropertyGroup>
   <ItemGroup><ProjectReference Include="../SriAutomation.LocalAgent/SriAutomation.LocalAgent.csproj" /></ItemGroup>
 </Project>

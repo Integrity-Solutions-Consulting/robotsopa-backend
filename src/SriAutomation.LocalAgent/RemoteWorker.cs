@@ -186,7 +186,7 @@ internal static class RemoteWorker
     private sealed record FinishResult(string Status);
 }
 
-internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim claim, Action<string>? trace = null) : IStateRepository, IDownloadPipeline
+internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim claim, Action<string>? trace = null, string? deliveryRoot = null, string? deliveryLock = null) : IStateRepository, IDownloadPipeline
 {
     private string Path => "/execution-agent/v1/" + Validation.Identifier(claim.JobId);
     private HttpRequestMessage Request(HttpMethod method, string suffix)
@@ -236,8 +236,20 @@ internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim
     public bool IsAvailable(Voucher document, string extension)
     {
         var account = Read(s => s.Accounts.Single(a => a.Id == document.Account));
-        var root = System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "SRI-Automation");
-        return LocalDocumentAvailability.IsAvailable(root, account.TaxId ?? account.Id, document, extension);
+        var root = deliveryRoot ?? System.IO.Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "SRI-Automation");
+        var taxId = account.TaxId ?? account.Id;
+        if (LocalDocumentAvailability.IsAvailable(root, taxId, document, extension)) return true;
+        using var response = Send(Request(HttpMethod.Get, "/available/" + Validation.Identifier(document.Id) + "/" + extension)).GetAwaiter().GetResult();
+        response.EnsureSuccessStatusCode();
+        if (!response.Content.ReadFromJsonAsync<bool>().GetAwaiter().GetResult()) return false;
+        // Serialize with the background delivery loop, which uses the same lock.
+        for (var attempt = 0; attempt < 40; attempt++)
+        {
+            try { DeliveryAgent.PollOnce(client, root, deliveryLock ?? DeliveryAgent.LockPath(), CancellationToken.None).GetAwaiter().GetResult(); }
+            catch (IOException) { Thread.Sleep(250); }
+            if (LocalDocumentAvailability.IsAvailable(root, taxId, document, extension)) return true;
+        }
+        throw new IOException("No se pudo recuperar la copia disponible en el servidor.");
     }
     public Voucher Process(DownloadedVoucher file)
     {
