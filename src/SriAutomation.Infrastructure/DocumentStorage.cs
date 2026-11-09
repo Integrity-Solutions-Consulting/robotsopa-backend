@@ -21,9 +21,26 @@ public sealed class DocumentStorage : IStorageProvider
     public void CheckAccess()
     {
         Directory.CreateDirectory(root);
+        CleanupStaging();
         var probe = Path.Combine(root, ".probe-" + Guid.NewGuid().ToString("N"));
         try { File.WriteAllText(probe, "ok"); if (File.ReadAllText(probe) != "ok") throw new IOException("Sin acceso de lectura."); }
         finally { if (File.Exists(probe)) File.Delete(probe); }
+    }
+    private void CleanupStaging()
+    {
+        if (!Directory.Exists(root)) return;
+        var cutoff = DateTime.UtcNow - TimeSpan.FromHours(24);
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(root, "*.tmp", SearchOption.AllDirectories))
+            {
+                try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+        }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
     public string Resolve(string relative)
     {
@@ -56,6 +73,7 @@ public sealed class DocumentStorage : IStorageProvider
         var path = Resolve(relative);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        var preserveTemporary = false;
         try
         {
             using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { file.Write(content); file.Flush(true); }
@@ -63,7 +81,12 @@ public sealed class DocumentStorage : IStorageProvider
             catch (IOException) when (File.Exists(path))
             { if (!File.ReadAllBytes(path).AsSpan().SequenceEqual(content)) throw new ArgumentException("Ya existe contenido distinto para esta clave."); }
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        catch (IOException)
+        {
+            preserveTemporary = true;
+            throw;
+        }
+        finally { if (!preserveTemporary && File.Exists(temporary)) File.Delete(temporary); }
         return relative;
     }
     private static bool TryAuthorizationDate(string? value, out DateOnly date)

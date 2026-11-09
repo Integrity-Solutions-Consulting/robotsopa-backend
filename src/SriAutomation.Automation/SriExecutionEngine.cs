@@ -8,6 +8,8 @@ namespace SriAutomation.Automation;
 
 public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPipeline downloads)
 {
+    internal static bool HasNewFiles(byte[]? xml, byte[]? pdf) => xml is not null || pdf is not null;
+
     public async Task Run(IPage page, PortalProfile profile, Execution execution, string taxId, CancellationToken cancellation)
     {
         if (repository is PostgresStateRepository) throw new InvalidOperationException("La ejecución PostgreSQL requiere propiedad de trabajo.");
@@ -68,17 +70,23 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                             var transferIssues = new List<string>();
                             if (needXml) try { xml = await portal.Download(row, "xml", cancellation); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga XML fallida."); }
                             if (needPdf) try { pdf = await portal.Download(row, "pdf", cancellation); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga PDF fallida."); }
+                            if (needXml && xml is null && !transferIssues.Contains("Descarga XML fallida.")) transferIssues.Add("XML: no se identificó un control de descarga disponible en la fila.");
+                            if (needPdf && pdf is null && !transferIssues.Contains("Descarga PDF fallida.")) transferIssues.Add("PDF: no se identificó un control de descarga disponible en la fila.");
                             Stage("Processing");
-                            var document = downloads.Process(new(query.Account, type, row.Key, row.Issued, xml, pdf));
-                            if (needXml && xml is null) transferIssues.Add("XML no disponible; documento parcial.");
-                            if (needPdf && pdf is null) transferIssues.Add("PDF no disponible; documento parcial.");
+                            var document = !HasNewFiles(xml, pdf) ? existing : downloads.Process(new(query.Account, type, row.Key, row.Issued, xml, pdf));
                             if (transferIssues.Count > 0)
                             {
-                                repository.Update(s => { var d = s.Documents.Single(d => d.Id == document.Id); d.Status = "Revisar"; d.Warning = string.Join(" ", d.Warning, string.Join(" ", transferIssues)); return true; });
+                                repository.Update(s => {
+                                    var e = s.Executions.Single(e => e.Id == execution.Id);
+                                    e.Errors++;
+                                    e.Issues.Add($"{date:yyyy-MM-dd} · {type} · fila {rowIndex + 1}: {string.Join(" ", transferIssues)}");
+                                    if (document is not null) { var d = s.Documents.Single(d => d.Id == document.Id); d.Status = "Revisar"; d.Warning = string.Join(" ", d.Warning, string.Join(" ", transferIssues)); }
+                                    return true;
+                                });
                                 errors++;
                             }
-                            downloadedCount++;
-                            repository.Update(s => { var e = s.Executions.Single(e => e.Id == execution.Id); e.Downloaded++; e.Processed++; return true; });
+                            if (xml is not null || pdf is not null) downloadedCount++;
+                            repository.Update(s => { var e = s.Executions.Single(e => e.Id == execution.Id); if (xml is not null || pdf is not null) e.Downloaded++; e.Processed++; return true; });
                         }
                         catch (Exception ex) when (ex is ArgumentException or InvalidDataException or System.Xml.XmlException)
                         {

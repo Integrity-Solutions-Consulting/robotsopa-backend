@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Json;
 using SriAutomation.Application;
 using SriAutomation.Domain;
@@ -12,14 +13,22 @@ internal sealed class RemoteExecution(HttpClient client,string id):IStateReposit
     public bool IsAvailable(Voucher document,string extension)=>client.GetFromJsonAsync<bool>(Path+"/available/"+Validation.Identifier(document.Id)+"/"+extension).GetAwaiter().GetResult();
     public Voucher Process(DownloadedVoucher file)
     {
-        try
+        Exception? last = null;
+        for (var attempt = 0; attempt < 3; attempt++)
         {
-            using var response=client.PostAsJsonAsync(Path+"/files",file).GetAwaiter().GetResult();
-            if(!response.IsSuccessStatusCode) throw new DocumentTransferException("DocumentProcessingFailed");
-            return response.Content.ReadFromJsonAsync<Voucher>().GetAwaiter().GetResult()??throw new DocumentTransferException("DocumentProcessingFailed");
+            try
+            {
+                using var response=client.PostAsJsonAsync(Path+"/files",file).GetAwaiter().GetResult();
+                if ((int)response.StatusCode is 408 or 429 or 500 or 502 or 503 or 504)
+                { last = new IOException($"Publicación transitoria HTTP {(int)response.StatusCode}."); if (attempt < 2) { Thread.Sleep(250 * (attempt + 1)); continue; } throw last; }
+                if(!response.IsSuccessStatusCode) throw new DocumentTransferException("DocumentProcessingFailed");
+                return response.Content.ReadFromJsonAsync<Voucher>().GetAwaiter().GetResult()??throw new DocumentTransferException("DocumentProcessingFailed");
+            }
+            catch(DocumentTransferException){throw;}
+            catch(Exception ex) when((ex is HttpRequestException http && (http.StatusCode is null or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests or HttpStatusCode.InternalServerError or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout)) || ex is TaskCanceledException or IOException)
+            { last = ex; if (attempt < 2) { Thread.Sleep(250 * (attempt + 1)); continue; } throw new DocumentTransferException("DocumentTransferFailed",ex); }
         }
-        catch(DocumentTransferException){throw;}
-        catch(Exception ex) when(ex is HttpRequestException or TaskCanceledException or IOException){throw new DocumentTransferException("DocumentTransferFailed",ex);}
+        throw new DocumentTransferException("DocumentTransferFailed",last);
     }
 }
 internal sealed class DocumentTransferException(string code,Exception? inner=null):Exception(code,inner)

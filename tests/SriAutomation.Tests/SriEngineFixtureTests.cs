@@ -73,6 +73,37 @@ public sealed class SriEngineFixtureTests
         finally { Directory.Delete(root, true); }
     }
     [BrowserFact]
+    public async Task MissingXmlKeepsExistingPdfsAndDoesNotSubmitEmptyFiles()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sri-partial-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var repository = new JsonStateRepository(Path.Combine(root, "state"));
+            var storage = new DocumentStorage(Path.Combine(root, "out"));
+            var query = new Query("a", new(2026, 9, 12), new(2026, 9, 12), ["Facturas"], Xml: false);
+            var first = repository.Update(s => { s.Accounts.Add(new("a", "Fixture", "1790000000001", true)); return Validation.Enqueue(s, query); });
+            var html = Html.Replace("<a class=\"xml\" href=\"/files/${key}.xml\" download>XML</a>", "");
+            await using var server = await FixtureServer.Start(html);
+            using var playwright = await Playwright.CreateAsync(); await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
+            var page = await browser.NewPageAsync(); await page.GotoAsync(server.Url);
+            var profile = Profile(); profile.Url = server.Url; profile.Validate(true);
+            var engine = new SriExecutionEngine(repository, new DownloadPipeline(repository, storage, new XmlDocumentParser()));
+            await engine.Run(page, profile, first, "1790000000001", CancellationToken.None);
+            var hashes = repository.Read(s => s.Documents.Select(d => d.PdfSha256).ToArray());
+            var second = repository.Update(s => Validation.Enqueue(s, query with { Xml = true }));
+            await engine.Run(page, profile, second, "1790000000001", CancellationToken.None);
+            Assert.Equal(2, server.Files);
+            Assert.Equal(hashes, repository.Read(s => s.Documents.Select(d => d.PdfSha256).ToArray()));
+            var result = repository.Read(s => s.Executions.Single(e => e.Id == second.Id));
+            Assert.Equal(2, result.Errors);
+            Assert.All(result.Issues, issue => Assert.Contains("XML", issue));
+            Assert.Equal("ConErrores", result.Queries.Single().Status);
+            Assert.All(repository.Read(s => s.Documents), d => Assert.Equal("Revisar", d.Status));
+        }
+        finally { Directory.Delete(root, true); }
+    }
+    [BrowserFact]
     public async Task ExpiredWrongAccountAndChallengeSuspendBeforeQuery()
     {
         using var playwright = await Playwright.CreateAsync(); await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });

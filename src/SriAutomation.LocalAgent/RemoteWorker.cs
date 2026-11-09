@@ -233,9 +233,32 @@ internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim
     }
     public Voucher Process(DownloadedVoucher file)
     {
-        var request = Request(HttpMethod.Post, "/files"); request.Content = JsonContent.Create(file);
-        using var response = Send(request).GetAwaiter().GetResult(); response.EnsureSuccessStatusCode();
-        return response.Content.ReadFromJsonAsync<Voucher>().GetAwaiter().GetResult() ?? throw new IOException("Documento no confirmado.");
+        Exception? last = null;
+        for (var attempt = 0; attempt < 3; attempt++)
+        {
+            try
+            {
+                var request = Request(HttpMethod.Post, "/files"); request.Content = JsonContent.Create(file);
+                using var response = Send(request).GetAwaiter().GetResult();
+                if ((int)response.StatusCode is 408 or 429 or 500 or 502 or 503 or 504)
+                {
+                    last = new IOException($"Publicación transitoria HTTP {(int)response.StatusCode}.");
+                    if (attempt < 2) { Thread.Sleep(250 * (attempt + 1)); continue; }
+                    throw last;
+                }
+                response.EnsureSuccessStatusCode();
+                return response.Content.ReadFromJsonAsync<Voucher>().GetAwaiter().GetResult() ?? throw new IOException("Documento no confirmado.");
+            }
+            catch (HttpRequestException ex) when (attempt < 2 && (ex.StatusCode is null or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests or HttpStatusCode.InternalServerError or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout))
+            {
+                last = ex; Thread.Sleep(250 * (attempt + 1));
+            }
+            catch (IOException ex) when (attempt < 2)
+            {
+                last = ex; Thread.Sleep(250 * (attempt + 1));
+            }
+        }
+        throw new DocumentTransferException("DocumentTransferFailed", last);
     }
     private sealed record Renewal(bool Cancelled);
     private sealed record RemoteCredential(string Username, string Password);

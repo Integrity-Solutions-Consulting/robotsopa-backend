@@ -21,6 +21,7 @@ public sealed class OwnedContentStore(IStorageProvider storage, OwnedStateReposi
         var temporary = storage.Resolve(staging);
         var relative = Path.Combine(".objects", hash[..2], hash + "." + extension);
         var target = storage.Resolve(relative);
+        var preserveTemporary = false;
         Directory.CreateDirectory(Path.GetDirectoryName(temporary)!);
         try
         {
@@ -35,6 +36,11 @@ public sealed class OwnedContentStore(IStorageProvider storage, OwnedStateReposi
             }
             return repository.Update(state => commit(state, relative, hash));
         }
-        finally { if (File.Exists(temporary)) File.Delete(temporary); }
+        catch (IOException)
+        {
+            preserveTemporary = true;
+            throw;
+        }
+        finally { if (!preserveTemporary && File.Exists(temporary)) File.Delete(temporary); }
     }
 }

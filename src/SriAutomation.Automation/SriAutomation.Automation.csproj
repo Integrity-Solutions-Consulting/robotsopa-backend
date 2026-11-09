@@ -14,5 +14,6 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+  <ItemGroup><InternalsVisibleTo Include="SriAutomation.Tests" /></ItemGroup>
 
 </Project>

@@ -72,7 +72,7 @@ app.Use(async (context, next) =>
     catch (Exception ex) when (ex is ArgumentException or InvalidDataException or KeyNotFoundException or System.Xml.XmlException)
     { await Results.Problem(ex.Message, statusCode: ex is KeyNotFoundException ? 404 : 400).ExecuteAsync(context); }
     catch (BadHttpRequestException) { await Results.Problem("Solicitud invÃ¡lida. Revise los campos admitidos.",statusCode:400).ExecuteAsync(context); }
-    catch (IOException) { await Results.Problem("Almacenamiento ocupado o no disponible. Reintente.", statusCode: 503).ExecuteAsync(context); }
+    catch (IOException ex) { app.Logger.LogError("Publish/storage failure type={Type} path={Path}", ex.GetType().Name, context.Request.Path); await Results.Problem("Almacenamiento ocupado o no disponible. Reintente.", statusCode: 503).ExecuteAsync(context); }
     catch (Exception ex) { app.Logger.LogError("Error interno de tipo {Type}", ex.GetType().Name); await Results.Problem("Error interno.", statusCode: 500).ExecuteAsync(context); }
     finally { AuditEndpoints.RecordRequest(context, app.Services.GetRequiredService<IStateRepository>()); }
 });

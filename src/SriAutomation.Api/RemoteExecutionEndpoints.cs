@@ -123,10 +123,14 @@ public static class RemoteExecutionEndpoints
         group.MapPost("/{id}/stop", (HttpContext c, string id) =>
         {
             if (Identity(c) is null) return Results.Unauthorized();
+            try
+            {
             var owner = Owner(c, id);
             var challenge = c.Request.Headers["X-Stop-Reason"] == "HumanChallenge";
             repository.UpdateOwned(owner, s => { var job = s.Executions.Single(e => e.Id == id); job.Status = job.CancelRequested ? "Cancelled" : "RequiresHumanAction"; job.Stage = job.Status; job.Finished = DateTimeOffset.UtcNow; ExecutionProgress.Set(s, id, job.Status, job.CancelRequested ? "Cancelada por el usuario." : challenge ? "El SRI solicita CAPTCHA o MFA. Complete la verificación autorizada y reanude el trabajo." : "La ejecución se detuvo y requiere intervención en Windows."); AuditTrail.Add(s, job.RequestedBy ?? "Agente", "Resultado de procesamiento", job.Query.Account, job.Status); return true; });
             coordinator.Release(owner); return Results.Ok();
+            }
+            catch (InvalidOperationException) { return Results.Conflict(new { code = "LeaseExpired", message = "El lease ya no es vÃ¡lido; no se aplicÃ³ ninguna escritura del agente antiguo." }); }
         });
     }
     private sealed class CompletedQuery : ISriComprobanteService
