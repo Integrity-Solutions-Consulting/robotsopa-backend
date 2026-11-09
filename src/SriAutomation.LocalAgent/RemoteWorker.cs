@@ -435,7 +435,7 @@ internal sealed class RemoteOwnedExecution(HttpClient client, RemoteWorker.Claim
                 trace?.Invoke("ARCHIVO_CONFIRMADO_API");
                 return voucher;
             }
-            catch (HttpRequestException ex) when (attempt < 2 && (ex.StatusCode is null or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests or HttpStatusCode.InternalServerError or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout))
+            catch (HttpRequestException ex) when (claim.StorageMode != "central-v1" && attempt < 2 && (ex.StatusCode is null or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests or HttpStatusCode.InternalServerError or HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout))
             { last = ex; Thread.Sleep(250 * (attempt + 1)); }
             catch (IOException ex) when (attempt < 2)
             { last = ex; Thread.Sleep(250 * (attempt + 1)); }
