@@ -91,10 +91,9 @@ public sealed class CoreTests : IDisposable
         var path = Storage.Report(account, 2026, 9, [d, d, other]);
         Storage.Report(account, 2026, 9, [d]); // Regeneración atómica.
         using var book = new XLWorkbook(Storage.Resolve(path));
-        Assert.Equal(3, book.Worksheets.Count); var sheet = book.Worksheet("Documentos");
-        Assert.Equal(2, sheet.LastRowUsed()!.RowNumber()); Assert.Equal(8, sheet.LastColumnUsed()!.ColumnNumber()); Assert.Equal(XLDataType.Number, sheet.Cell(2, 8).DataType);
-        Assert.Equal("0012345678", sheet.Cell(2, 6).GetString()); Assert.Equal(11.50m, sheet.Cell(2, 8).GetValue<decimal>());
-        Assert.DoesNotContain(sheet.Row(1).CellsUsed(), c => c.GetString() is "Clave de acceso" or "Ruta PDF" or "Ruta XML" or "Estado de extracción");
+        var sheet = book.Worksheet("Resumen");
+        Assert.Equal(2, sheet.LastRowUsed()!.RowNumber()); Assert.Equal(14, sheet.LastColumnUsed()!.ColumnNumber()); Assert.Equal(XLDataType.Number, sheet.Cell(2, 10).DataType);
+        Assert.Equal("0012345678", sheet.Cell(2, 6).GetString()); Assert.Equal(11.50m, sheet.Cell(2, 10).GetValue<decimal>());
         Assert.Equal(1, sheet.SheetView.SplitRow); Assert.True(sheet.AutoFilter.IsEnabled);
     }
     [Fact]
@@ -104,8 +103,7 @@ public sealed class CoreTests : IDisposable
         d.Recipient = string.Join(" ", Enumerable.Repeat("RECEPTOR FICTICIO", 10));
         d.Status = "Revisar"; d.Warning = string.Join(" ", Enumerable.Repeat("Dato pendiente de revisión", 10));
         using var book = new XLWorkbook(Storage.Resolve(Storage.Report(account, 2026, 9, [d])));
-        Assert.True(book.Worksheet("Documentos").Cell(2, 5).Style.Alignment.WrapText);
-        Assert.True(book.Worksheet("Documentos").Row(2).Height > 20);
+        Assert.True(book.Worksheet("Resumen").Column(5).Width >= 12);
         Assert.True(book.Worksheet("Pendientes").Row(2).Height > 20);
         Assert.Equal("Número de comprobante", book.Worksheet("Pendientes").Cell(1, 1).GetString());
     }

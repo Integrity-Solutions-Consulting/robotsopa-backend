@@ -15,6 +15,10 @@ public static class AssistantAccess
         var p=parts.Skip(2).ToArray(); var method=c.Request.Method; var user=(string)c.Items["PanelUser"]!;
         var assigned=db.AssignedAccounts(user);
         bool Has(string? account)=>account is not null && assigned.Contains(account);
+        if (p[0] == "document-explorer" && p.Length >= 2 && Has(p[1])) {
+            if (method == "GET" && (p.Length == 2 || p.Length == 3 && p[2] == "items" || p.Length == 4 && p[2] == "zip" || p.Length == 5 && p[2] == "zip" && p[4] == "file")) return true;
+            if (method == "POST" && p.Length == 3 && p[2] == "zip") return true;
+        }
         if (p.Length == 1 && p[0] == "delivery-agents" && method is "POST" or "GET") return true;
         if (p.Length == 3 && p[0] == "delivery-agents" && p[2] == "rotate" && method == "POST") return true;
         if (p.Length == 2 && p[0] == "delivery-agents" && method == "DELETE") return true;

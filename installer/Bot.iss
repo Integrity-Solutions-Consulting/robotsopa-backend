@@ -1,5 +1,5 @@
 ﻿#define MyAppName "Bot"
-#define MyAppVersion "1.0.1"
+#define MyAppVersion "1.0.8"
 [Setup]
 AppId={{B2411B51-2C2D-47B1-887A-495C8974E3C5}
 AppName={#MyAppName}
@@ -7,7 +7,7 @@ AppVersion={#MyAppVersion}
 DefaultDirName={autopf}\Bot
 DefaultGroupName=Bot
 OutputDir=output
-OutputBaseFilename=Bot-Setup-1.0.1-rc
+OutputBaseFilename=Bot-Setup-1.0.8-rc
 Compression=lzma2
 SolidCompression=yes
 ArchitecturesAllowed=x64compatible

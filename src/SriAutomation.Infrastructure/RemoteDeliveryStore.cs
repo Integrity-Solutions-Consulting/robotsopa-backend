@@ -2,7 +2,7 @@ using Npgsql;
 
 namespace SriAutomation.Infrastructure;
 
-public sealed record PendingRemoteDelivery(Guid Id, string AccountId, string DocumentId, string Kind, string DestinationPath, string Sha256, int Attempts);
+public sealed record PendingRemoteDelivery(Guid Id, string AccountId, string DocumentId, string Kind, string DestinationPath, string Sha256, int Attempts, long Generation = 0);
 public sealed record RemoteDeliveryStatus(string AccountId, string Kind, string Status, string? LastError, DateTime CreatedAt, DateTime? DeliveredAt);
 public sealed record RemoteDeliveryFile(string AccountId, string DocumentId, string Kind, string SourcePath, string Sha256);
 
@@ -30,12 +30,27 @@ public sealed class RemoteDeliveryStore(string connectionString)
         return cmd.ExecuteNonQuery() == 1;
     }
 
+    public void Requeue(string username, string documentId, string kind, string hash)
+    {
+        using var db = new NpgsqlConnection(connectionString); db.Open();
+        using var cmd = new NpgsqlCommand($"UPDATE remote_deliveries d SET status='Pending', delivered_at=NULL, last_error=NULL WHERE {Authorized} AND d.document_id=@document AND d.kind=@kind AND d.sha256=@hash", db);
+        cmd.Parameters.AddWithValue("username", username); cmd.Parameters.AddWithValue("document", documentId);
+        cmd.Parameters.AddWithValue("kind", kind); cmd.Parameters.AddWithValue("hash", hash);
+        cmd.ExecuteNonQuery();
+    }
     public IReadOnlyList<PendingRemoteDelivery> Pending(string username)
     {
         using var db = new NpgsqlConnection(connectionString); db.Open();
         using var cmd = new NpgsqlCommand($"""
-            SELECT d.id,d.account_id,d.document_id,d.kind,d.destination_path,d.sha256,d.attempts
+            SELECT d.id,d.account_id,d.document_id,d.kind,d.destination_path,d.sha256,d.attempts,
+              CASE WHEN d.kind='xlsx' THEN 0 ELSE COALESCE((SELECT (doc->>(CASE d.kind WHEN 'pdf' THEN 'pdfGeneration' ELSE 'xmlGeneration' END))::bigint
+                FROM app_state s, jsonb_array_elements(s.payload->'documents') doc WHERE s.id=1 AND doc->>'id'=d.document_id AND doc->>'account'=d.account_id),1) END
             FROM remote_deliveries d WHERE {Authorized} AND d.status='Pending'
+              AND (d.kind = 'xlsx' OR EXISTS (
+                SELECT 1 FROM app_state s, jsonb_array_elements(s.payload->'documents') doc
+                WHERE s.id=1 AND doc->>'id'=d.document_id AND doc->>'account'=d.account_id
+                  AND CASE d.kind WHEN 'pdf' THEN doc->>'pdfSha256' WHEN 'xml' THEN doc->>'xmlSha256' END = d.sha256
+                  AND CASE d.kind WHEN 'pdf' THEN doc->>'pdfPath' WHEN 'xml' THEN doc->>'xmlPath' END = d.source_path))
               AND (d.kind <> 'xlsx' OR NOT EXISTS (
                 SELECT 1 FROM remote_deliveries newer
                 WHERE newer.username=d.username AND newer.document_id=d.document_id AND newer.kind=d.kind
@@ -44,7 +59,7 @@ public sealed class RemoteDeliveryStore(string connectionString)
             """, db);
         cmd.Parameters.AddWithValue("username", username);
         using var reader = cmd.ExecuteReader(); var result = new List<PendingRemoteDelivery>();
-        while (reader.Read()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetInt32(6)));
+        while (reader.Read()) result.Add(new(reader.GetGuid(0), reader.GetString(1), reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetInt32(6), reader.GetInt64(7)));
         return result;
     }
 

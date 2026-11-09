@@ -9,6 +9,36 @@ namespace SriAutomation.Tests;
 
 public sealed class SriEngineFixtureTests
 {
+    [BrowserFact]
+    public async Task ObservedEngineReachesRideClickFromRow()
+    {
+        const string html="""
+        <p>1790000000001</p><button>Salir</button><label for='fecha'>Fecha</label><input id='fecha'>
+        <select><option value='01'>Factura</option></select><button onclick='load()'>Consultar</button>
+        <table><thead><tr><th>Clave de acceso</th><th>Fecha de emision</th><th>RIDE</th></tr></thead><tbody></tbody></table>
+        <script>async function load(){await fetch('/query',{method:'POST'});document.querySelector('tbody').innerHTML=`<tr><td>${'1'.repeat(49)}</td><td>12/09/2026</td><td><a href='RIDE_URL' download><i style='display:inline-block;width:20px;height:20px'></i></a></td></tr>`}</script>
+        """;
+        var root=Path.Combine(Path.GetTempPath(),"sri-observed-engine-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
+        try {
+            var repository=new JsonStateRepository(root);var query=new Query("a",new(2026,9,12),new(2026,9,12),["Facturas"]);
+            var job=repository.Update(s=>{s.Accounts.Add(new("a","Fixture","1790000000001",true));return Validation.Enqueue(s,query);});
+            await using var server=await FixtureServer.Start(Html);
+            var fixtureHtml=html.Replace("RIDE_URL",server.Url.TrimEnd('/')+"/files/"+PhaseTwoTests.Key+".pdf");
+            using var playwright=await Playwright.CreateAsync();await using var browser=await playwright.Chromium.LaunchAsync(new(){Headless=true});var page=await browser.NewPageAsync();
+            await page.RouteAsync("https://srienlinea.sri.gob.ec/**",async route=>{
+                var path=new Uri(route.Request.Url).AbsolutePath;
+                if(path=="/query")await route.FulfillAsync(new(){ContentType="application/json",Body="{}"});
+                else await route.FulfillAsync(new(){ContentType="text/html",Body=fixtureHtml});
+            });
+            await page.GotoAsync("https://srienlinea.sri.gob.ec/consulta");
+            var profile=await ObservedPortalProfile.Discover(page,"1790000000001",true);profile.ResponseUrlPattern="/query$";profile.MinQueryIntervalMs=0;
+            var trace=new List<string>();profile.TraceStep=trace.Add;
+            try { await new SriExecutionEngine(repository,new ExistingFirstPipeline()).Run(page,profile,job,"1790000000001",CancellationToken.None); }
+            catch(Exception ex) { throw new InvalidOperationException(string.Join(" | ",trace),ex); }
+            Assert.True(trace.IndexOf("DownloadRow page=1 row=1")<trace.IndexOf("DownloadPDFControlChecking"));
+            Assert.Contains("DownloadPDFControlFound",trace);Assert.Contains("DownloadPDFClickAttempted",trace);Assert.Contains("DownloadPDFClickCompleted",trace);Assert.Contains("DownloadPDFReceived",trace);
+        } finally {Directory.Delete(root,true);}
+    }
     internal const string Html = """
         <!doctype html><html><body><div id="authenticated">Sesión fixture</div><span id="account">1790000000001</span><div id="login" hidden>Login fixture</div><div id="challenge" hidden>Verificación fixture</div>
         <input id="date"><select id="type"><option value="01">Factura</option></select><button id="search" onclick="current=0;load()">Consultar</button>
@@ -45,6 +75,32 @@ public sealed class SriEngineFixtureTests
         MaxDocuments = 10,
         MaxAutomaticDays = 3
     };
+    [BrowserFact]
+    public async Task RowDecisionExplainsExistingFilesAndMissingPdfReachesClick()
+    {
+        var root=Path.Combine(Path.GetTempPath(),"sri-row-trace-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
+        try {
+            var repository=new JsonStateRepository(root);
+            var query=new Query("a",new(2026,9,12),new(2026,9,12),["Facturas"]);
+            var job=repository.Update(s=>{s.Accounts.Add(new("a","Fixture","1790000000001",true));s.Documents.Add(new Voucher{Account="a",Type="Facturas",AccessKey=PhaseTwoTests.Key,Issued=new(2026,9,12)});return Validation.Enqueue(s,query);});
+            await using var server=await FixtureServer.Start(Html);
+            using var playwright=await Playwright.CreateAsync(); await using var browser=await playwright.Chromium.LaunchAsync(new(){Headless=true}); var page=await browser.NewPageAsync(); await page.GotoAsync(server.Url);
+            var trace=new List<string>(); var profile=Profile();profile.Url=server.Url;profile.TraceStep=trace.Add;
+            await new SriExecutionEngine(repository,new ExistingFirstPipeline()).Run(page,profile,job,"1790000000001",CancellationToken.None);
+            Assert.Contains("DownloadRowSkipped NoFilesNeeded",trace);
+            Assert.Contains("DownloadRowDecision pdfRequested=True xmlRequested=False existing=True pdfNeeded=False xmlNeeded=False",trace);
+            Assert.Contains("DownloadRowDecision pdfRequested=True xmlRequested=False existing=False pdfNeeded=True xmlNeeded=False",trace);
+            Assert.True(trace.IndexOf("DownloadRow page=2 row=1")<trace.IndexOf("DownloadPDFClickAttempted"));
+            Assert.Contains("DownloadPDFControlFound",trace);Assert.Contains("DownloadPDFClickCompleted",trace);Assert.Contains("DownloadPDFReceived",trace);
+            Assert.Equal(1,server.Files); Assert.DoesNotContain(trace,e=>e.Contains(PhaseTwoTests.Key));
+            Assert.Equal(2,trace.Count(e=>e.StartsWith("DownloadRowStructure ")));
+        } finally { Directory.Delete(root,true); }
+    }
+    private sealed class ExistingFirstPipeline : IDownloadPipeline
+    {
+        public bool IsAvailable(Voucher document,string extension)=>true;
+        public Voucher Process(DownloadedVoucher download)=>new();
+    }
     [BrowserFact]
     public async Task JsfPaginationDownloadsAllPdfsAndRecoveryUsesPersistentManifest()
     {

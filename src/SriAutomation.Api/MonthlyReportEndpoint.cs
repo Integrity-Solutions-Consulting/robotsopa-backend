@@ -1,4 +1,5 @@
 using SriAutomation.Application;
+using System.Security.Cryptography;
 
 namespace SriAutomation.Api;
 
@@ -10,8 +11,7 @@ public static class MonthlyReportEndpoint
         _ = new DateOnly(year, month, 1); Validation.Identifier(account);
         var name = $"Resumen_{year:D4}_{month:D2}.xlsx";
         var path = storage.Resolve(Path.Combine(storage.AccountDirectory(account), year.ToString("D4"), $"{month:D2}-{names[month - 1]}", name));
-        var committed = repository.Read(s => s.Executions.Where(e => e.Query.Account == account && (e.Status is "Completed" or "CompletedWithWarnings"))
-            .OrderByDescending(e => e.Finished).SelectMany(e => e.Reports).FirstOrDefault(report => report.Year == year && report.Month == month)?.Path);
+        var committed = repository.Read(s => MonthlyReportPublication.Find(s, account, year, month));
         if (committed is not null && File.Exists(storage.Resolve(committed))) path = storage.Resolve(committed);
         if (!File.Exists(path))
         {
@@ -23,6 +23,19 @@ public static class MonthlyReportEndpoint
             if (!File.Exists(path) && previous is not null) path = previous;
         }
         if (!File.Exists(path)) throw new KeyNotFoundException("Genere primero el reporte.");
-        return Results.File(path, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", name);
+        // Only content-addressed committed reports have a trusted stored hash.
+        // Historical paths without one require a separate verified migration.
+        if (committed is null || !committed.Replace('\\','/').StartsWith(".objects/", StringComparison.Ordinal))
+            return Results.Conflict(new { detail = "El reporte histórico no tiene un hash verificable." });
+        var expected = Path.GetFileNameWithoutExtension(committed);
+        if (expected.Length != 64 || !expected.All(Uri.IsHexDigit) || !string.Equals(path, storage.Resolve(committed), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal))
+            return Results.Conflict(new { detail = "El reporte vigente no está disponible o no tiene un hash verificable." });
+        var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        try {
+            var actual = Convert.ToHexStringLower(SHA256.HashData(file));
+            if (!actual.Equals(expected, StringComparison.OrdinalIgnoreCase)) { file.Dispose(); return Results.Conflict(new { detail = "El reporte no supera la comprobación de integridad." }); }
+            file.Position = 0;
+            return Results.File(file, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", name);
+        } catch { file.Dispose(); throw; }
     }
 }

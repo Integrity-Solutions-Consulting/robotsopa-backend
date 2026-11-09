@@ -29,11 +29,16 @@ public sealed class OwnedContentStore(IStorageProvider storage, OwnedStateReposi
             { file.Write(content); file.Flush(true); }
             repository.VerifyOwnership();
             Directory.CreateDirectory(Path.GetDirectoryName(target)!);
-            try { File.Move(temporary, target, false); }
-            catch (IOException) when (File.Exists(target))
+            // Coordinate publishers before repairing a corrupt content-addressed
+            // object. Keep the corrupt bytes for investigation; never delete them.
+            using var gate = new FileStream(target + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+            if (File.Exists(target) && DownloadPipeline.Hash(File.ReadAllBytes(target)) != hash)
             {
-                if (DownloadPipeline.Hash(File.ReadAllBytes(target)) != hash) throw new InvalidDataException("Colisión o corrupción del objeto inmutable.");
+                var quarantine = storage.Resolve(Path.Combine(".corrupt", hash[..2], hash + "." + Guid.NewGuid().ToString("N") + "." + extension));
+                Directory.CreateDirectory(Path.GetDirectoryName(quarantine)!);
+                File.Move(target, quarantine, false);
             }
+            if (!File.Exists(target)) File.Move(temporary, target, false);
             return repository.Update(state => commit(state, relative, hash));
         }
         catch (IOException)

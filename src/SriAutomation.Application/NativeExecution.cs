@@ -27,8 +27,9 @@ public static class NativeExecution
         if(update.AttemptedKeys.Any(k=>k.Length!=49||!k.All(char.IsAsciiDigit)))throw new ArgumentException("Claves inválidas.");
         if(update.Queries.Any(q=>q.Date<job.Query.From||q.Date>job.Query.To||!job.Query.Types.Contains(q.Type)))throw new ArgumentException("Resultado fuera del alcance solicitado.");
         job.SriCheckpoint=update.SriCheckpoint;job.Queries=update.Queries;job.AttemptedKeys=job.AttemptedKeys.Union(update.AttemptedKeys).ToList();
-        job.Checkpoint=update.Checkpoint;job.Downloaded=update.Downloaded;job.Processed=update.Processed;job.Found=update.Found;job.Errors=update.Errors;job.Issues=update.Issues.Take(100).ToList();
+        job.Checkpoint=update.Checkpoint;job.Downloaded=update.Downloaded;job.Processed=update.Processed;job.Found=update.Found;job.Errors=Math.Max(update.Errors, job.Queries.Sum(q => q.Errors));job.Issues=update.Issues.Take(100).ToList();
         if(new[]{"Querying","Downloading","Processing","RecognizingControls","OpeningQuery","WaitingForHuman","AuthenticatingApplication"}.Contains(update.Stage))ExecutionProgress.Set(state,id,update.Stage,update.Stage switch{"AuthenticatingApplication"=>"Autenticando la aplicación de comprobantes con el perfil autorizado.","WaitingForHuman"=>"El SRI solicita verificación humana. Complétela en su ventana; el bot seguirá al detectarla.","OpeningQuery"=>"Esperando la redirección y apertura de la consulta en la sesión autorizada.","Querying"=>"Consultando comprobantes en el SRI.","Downloading"=>"Descargando PDF.","RecognizingControls"=>"Reconociendo los filtros del SRI.",_=>"Verificando y guardando documentos."});
         foreach(var doc in delta.Documents){var existing=state.Documents.SingleOrDefault(d=>d.Id==doc.Id&&d.Account==job.Query.Account);if(existing is null)continue;existing.Status=doc.Status;existing.Warning=doc.Warning;}
+        ReviewCounter.Update(state, job);
     }
 }

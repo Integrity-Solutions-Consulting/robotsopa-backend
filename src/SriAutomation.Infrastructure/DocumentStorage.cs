@@ -1,6 +1,4 @@
 using ClosedXML.Excel;
-using System.Globalization;
-using System.Text.RegularExpressions;
 using SriAutomation.Application;
 using SriAutomation.Domain;
 using UglyToad.PdfPig;
@@ -89,26 +87,16 @@ public sealed class DocumentStorage : IStorageProvider
         finally { if (!preserveTemporary && File.Exists(temporary)) File.Delete(temporary); }
         return relative;
     }
-    private static bool TryAuthorizationDate(string? value, out DateOnly date)
-    {
-        date = default;
-        if (string.IsNullOrWhiteSpace(value)) return false;
-        // Interpretar la fecha escrita en el comprobante sin convertirla a otra zona horaria.
-        var match = Regex.Match(value.Trim(), @"^(?<date>\d{4}-\d{2}-\d{2}|\d{2}/\d{2}/\d{4})(?:[T ](?<time>\d{2}:\d{2}:\d{2}(?:\.\d{1,7})?)(?<zone>Z|[+-]\d{2}:\d{2})?)?$");
-        if (!match.Success || !DateOnly.TryParseExact(match.Groups["date"].Value, ["yyyy-MM-dd", "dd/MM/yyyy"], CultureInfo.InvariantCulture, DateTimeStyles.None, out date)) return false;
-        if (match.Groups["time"].Success && !TimeOnly.TryParseExact(match.Groups["time"].Value, ["HH:mm:ss", "HH:mm:ss.FFFFFFF"], CultureInfo.InvariantCulture, DateTimeStyles.None, out _)) return false;
-        var zone = match.Groups["zone"].Value;
-        if (zone.Length > 1 && (!int.TryParse(zone.AsSpan(1, 2), out var hours) || !int.TryParse(zone.AsSpan(4, 2), out var minutes) || hours > 14 || minutes > 59 || (hours == 14 && minutes != 0))) return false;
-        return true;
-    }
-    public string Report(string account, int year, int month, IEnumerable<Voucher> documents)
+    public string Report(string account, int year, int month, IEnumerable<Voucher> documents) => GenerateReport(account, year, month, documents, false).Path;
+    public (string Path, byte[] Bytes) ReportSnapshot(string account, int year, int month, IEnumerable<Voucher> documents) => GenerateReport(account, year, month, documents, true);
+    private (string Path, byte[] Bytes) GenerateReport(string account, int year, int month, IEnumerable<Voucher> documents, bool snapshot)
     {
         _ = new DateOnly(year, month, 1);
         var directory = Resolve(Path.Combine(year.ToString("D4"), ".report-" + Validation.Identifier(account)));
         Directory.CreateDirectory(Path.GetDirectoryName(directory)!);
         using var gate = new FileStream(directory + ".lock", FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
         var rows = documents.Where(d => d.Account == account && d.Issued.Year == year && d.Issued.Month == month)
-            .DistinctBy(d => (d.Type, d.AccessKey)).OrderBy(d => d.Issued).ThenBy(d => d.Number).ToList();
+            .DistinctBy(d => (d.Type, Key: string.IsNullOrWhiteSpace(d.AccessKey) ? "id:" + d.Id : "key:" + d.AccessKey)).OrderBy(d => d.Issued).ThenBy(d => d.Number).ToList();
         using var book = new XLWorkbook();
         var sheet = book.AddWorksheet("Documentos");
         string[] headers = ["Tipo de comprobante", "Número de documento", "Número de autorización", "Fecha y hora de autorización", "Razón social", "Identificación", "Subtotal", "Total"];
@@ -117,19 +105,14 @@ public sealed class DocumentStorage : IStorageProvider
         foreach (var d in rows)
         {
             sheet.Cell(row, 1).Value = d.Type; sheet.Cell(row, 2).Value = d.Number;
-            sheet.Cell(row, 3).Value = d.Authorization;
-            if (TryAuthorizationDate(d.AuthorizedAt, out var authorizationDate))
-                sheet.Cell(row, 4).Value = authorizationDate.ToDateTime(TimeOnly.MinValue);
-            else
-                System.Diagnostics.Trace.TraceWarning("Fecha de autorizaci?n ausente o inv?lida para comprobante {0}.", d.AccessKey);
+            sheet.Cell(row, 3).Value = d.Authorization; sheet.Cell(row, 4).Value = d.AuthorizedAt;
             sheet.Cell(row, 5).Value = d.Recipient; sheet.Cell(row, 6).Value = d.Identification;
             if (d.Subtotal.HasValue) sheet.Cell(row, 7).Value = d.Subtotal.Value;
             if (d.Total.HasValue) sheet.Cell(row, 8).Value = d.Total.Value;
             row++;
         }
         sheet.Columns(7, 8).Style.NumberFormat.Format = "#,##0.00";
-        sheet.Column(4).Style.NumberFormat.Format = "dd/MM/yyyy";
-        foreach (var column in new[] { 2, 3, 6 }) sheet.Column(column).Style.NumberFormat.Format = "@";
+        foreach (var column in new[] { 2, 3, 4, 6 }) sheet.Column(column).Style.NumberFormat.Format = "@";
         var summary = book.AddWorksheet("Resumen");
         string[] summaryHeaders = ["Tipo", "Documentos", "Total del tipo", "Sin importe"];
         for (var i = 0; i < summaryHeaders.Length; i++) summary.Cell(1, i + 1).Value = summaryHeaders[i];
@@ -153,8 +136,8 @@ public sealed class DocumentStorage : IStorageProvider
             used.Style.Alignment.Vertical = XLAlignmentVerticalValues.Center;
             ws.Row(1).Style.Font.Bold = true; ws.Row(1).Style.Fill.BackgroundColor = XLColor.FromHtml("#15334D"); ws.Row(1).Style.Font.FontColor = XLColor.White;
             ws.Row(1).Height = 24;
-            ws.SheetView.FreezeRows(1); used.SetAutoFilter(); ws.Columns().AdjustToContents(12, 55);
-            foreach (var column in ws.ColumnsUsed()) column.Width = Math.Min(60, column.Width + 2);
+            ws.SheetView.FreezeRows(1); used.SetAutoFilter(); ws.Columns().AdjustToContents();
+            foreach (var column in ws.ColumnsUsed()) column.Width = Math.Min(60, Math.Max(12, column.Width + 2));
             for (var r = 2; r <= used.LastRow().RowNumber(); r++)
             {
                 ws.Row(r).Height = 20;
@@ -172,6 +155,8 @@ public sealed class DocumentStorage : IStorageProvider
         errors.Column(3).Style.Alignment.WrapText = true;
         for (var r = 2; r <= errors.LastRowUsed()!.RowNumber(); r++)
             errors.Row(r).Height = Math.Min(409, Math.Max(20, 15 * Math.Ceiling(errors.Cell(r, 3).GetString().Length / Math.Max(1, errors.Column(3).Width - 4))));
+        book.Worksheet("Documentos").Delete();
+        MonthlyXmlReport.Add(book, rows, Resolve);
         var relative = Path.Combine(AccountDirectory(account), year.ToString("D4"), $"{month:D2}-{Months[month - 1]}", $"Resumen_{year:D4}_{month:D2}.xlsx");
         var path = Resolve(relative); var temporary = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
@@ -181,6 +166,6 @@ public sealed class DocumentStorage : IStorageProvider
             File.Move(temporary, path, true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
-        return relative;
+        return (relative, snapshot ? File.ReadAllBytes(path) : []);
     }
 }

@@ -89,6 +89,7 @@ public sealed class PostgresStateRepository(string connectionString) : IStateRep
 
     private static void EnqueueOwnedFiles(NpgsqlConnection connection, NpgsqlTransaction transaction, State state, Execution job)
     {
+        if (job.CentralStorageAgent) return;
         if (string.IsNullOrWhiteSpace(job.RequestedBy)) return;
         var account = state.Accounts.SingleOrDefault(a => a.Id == job.Query.Account);
         var taxId = account?.TaxId ?? account?.Id;

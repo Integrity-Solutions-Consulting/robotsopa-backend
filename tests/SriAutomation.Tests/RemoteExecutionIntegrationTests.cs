@@ -88,6 +88,7 @@ public sealed class RemoteExecutionIntegrationTests
             builder.Services.AddSingleton<IStorageProvider>(new DocumentStorage(directory)); builder.Services.AddSingleton<IDocumentParser, XmlDocumentParser>();
             builder.Services.AddSingleton<IStateRepository>(repo);
             await using var app = builder.Build();
+            app.Use(async (c, next) => { try { await next(); } catch (Exception ex) when (ex is ArgumentException or InvalidDataException or System.Xml.XmlException) { c.Response.StatusCode = 400; } });
             app.Use(async (c, next) => { if (c.Request.Headers["X-Test-Https"] == "1") c.Request.Scheme = "https"; await next(); });
             app.MapPanelEndpoints(app.MapGroup("/api/v1"), new PostgresPanelDatabase(connection));
             app.MapGet("/api/v1/reports/{account}/{year:int}/{month:int}", MonthlyReportEndpoint.Download);
@@ -175,15 +176,93 @@ public sealed class RemoteExecutionIntegrationTests
             remote.Update(s => { s.Executions.Single().AttemptedKeys.Add(key); return true; });
             var pdf = PdfFixture.BuildLines(["CLAVE DE ACCESO: " + key]);
             var file = new DownloadedVoucher(account, "Facturas", key, date, null, pdf);
-            var uploaded = remote.Process(file); var duplicate = remote.Process(file); Assert.Equal(uploaded.Id, duplicate.Id);
+            Assert.Equal(HttpStatusCode.BadRequest, Assert.Throws<HttpRequestException>(() => remote.Process(file with { Pdf = [1, 2, 3] })).StatusCode);
+            Assert.Contains("code=PDF_INVALID", logs.Text);
+            Assert.Equal(HttpStatusCode.BadRequest, Assert.Throws<HttpRequestException>(() => remote.Process(file with { Issued = date.AddDays(1) })).StatusCode);
+            Assert.Contains("code=JOB_DATE_OUT_OF_RANGE", logs.Text);
+            Assert.Equal(HttpStatusCode.BadRequest, Assert.Throws<HttpRequestException>(() => remote.Process(file with { Account = "other" })).StatusCode);
+            Assert.Contains("code=JOB_ACCOUNT_MISMATCH", logs.Text);
+            Assert.Equal(HttpStatusCode.BadRequest, Assert.Throws<HttpRequestException>(() => remote.Process(file with { Type = "Retenciones" })).StatusCode);
+            Assert.Contains("code=JOB_TYPE_MISMATCH", logs.Text);
+            Assert.Equal(HttpStatusCode.BadRequest, Assert.Throws<HttpRequestException>(() => remote.Process(file with { Key = new string('8', 49) })).StatusCode);
+            Assert.Contains("code=JOB_KEY_NOT_ATTEMPTED", logs.Text);
+            var wrongIssuer = PdfFixture.BuildLines(["CLAVE DE ACCESO: " + key, "RUC: 9999999999999"]);
+            Assert.Equal(HttpStatusCode.BadRequest, Assert.Throws<HttpRequestException>(() => remote.Process(file with { Pdf = wrongIssuer })).StatusCode);
+            Assert.Contains("code=ISSUER_ACCOUNT_MISMATCH", logs.Text);
+            var wrongDate = PdfFixture.BuildLines(["CLAVE DE ACCESO: " + key, "FECHA DE EMISION: 11/09/2026"]);
+            Assert.Equal(HttpStatusCode.BadRequest, Assert.Throws<HttpRequestException>(() => remote.Process(file with { Pdf = wrongDate })).StatusCode);
+            Assert.Contains("code=PDF_DATE_MISMATCH", logs.Text);
+            var mismatchedKey = PdfFixture.BuildLines(["CLAVE DE ACCESO: " + new string('9', 49)]);
+            Assert.Equal(HttpStatusCode.BadRequest, Assert.Throws<HttpRequestException>(() => remote.Process(file with { Pdf = mismatchedKey })).StatusCode);
+            Assert.Contains("code=PDF_KEY_MISMATCH", logs.Text);
+            var uploaded = remote.Process(file);
+            // Simulate a pre-upgrade document without the new JSON properties.
+            Sql("UPDATE app_state SET payload=jsonb_set(payload, '{documents,0}', (payload->'documents'->0)-'pdfGeneration'-'xmlGeneration'-'pdfHistory') WHERE id=1");
+            var legacy = repo.Read(s => s.Documents.Single());
+            Assert.Equal(1, legacy.PdfGeneration); Assert.Equal(1, legacy.XmlGeneration); Assert.Empty(legacy.PdfHistory);
+            var duplicate = remote.Process(file); Assert.Equal(uploaded.Id, duplicate.Id);
+            var oldDelivery = Assert.Single(deliveries.Pending("tester").Where(d => d.DocumentId == uploaded.Id && d.Kind == "pdf"));
+            var differentPdf = PdfFixture.BuildLines(["CLAVE DE ACCESO: " + key, "EJEMPLAR DIFERENTE"]);
+            var revised = remote.Process(file with { Pdf = differentPdf });
+            Assert.Equal(uploaded.Id, revised.Id);
+            Assert.Equal(DownloadPipeline.Hash(differentPdf), revised.PdfSha256);
+            Assert.Contains(revised.PdfHistory, v => v.Sha256 == uploaded.PdfSha256 && v.Path == uploaded.PdfPath);
+            Assert.True(File.Exists(serverStorage.Resolve(uploaded.PdfPath!)));
+            Assert.DoesNotContain(deliveries.Pending("tester"), d => d.DocumentId == uploaded.Id && d.Sha256 == uploaded.PdfSha256);
+            Assert.Contains(deliveries.Pending("tester"), d => d.DocumentId == uploaded.Id && d.Sha256 == revised.PdfSha256);
+            var newDelivery = Assert.Single(deliveries.Pending("tester").Where(d => d.DocumentId == uploaded.Id && d.Kind == "pdf"));
+            Assert.True(newDelivery.Generation > oldDelivery.Generation);
+            var generationRoot = Path.Combine(directory, "generations");
+            DeliveryAgent.RecordGeneration(generationRoot, newDelivery);
+            Assert.Throws<InvalidDataException>(() => DeliveryAgent.RecordGeneration(generationRoot, oldDelivery));
+            var unproven = PdfFixture.BuildLines(["EJEMPLAR SIN CLAVE"]);
+            var reused = remote.Process(file with { Pdf = unproven });
+            Assert.Equal(revised.PdfSha256, reused.PdfSha256);
+            File.Delete(serverStorage.Resolve(revised.PdfPath!));
+            Assert.Equal(HttpStatusCode.BadRequest, Assert.Throws<HttpRequestException>(() => remote.Process(file with { Pdf = unproven })).StatusCode);
+            Assert.Contains("code=PDF_IDENTITY_UNPROVEN", logs.Text);
+            remote.Process(file with { Pdf = differentPdf });
+            File.WriteAllBytes(serverStorage.Resolve(revised.PdfPath!), [1, 2, 3]);
+            using (var check = new HttpRequestMessage(HttpMethod.Get, $"/execution-agent/v1/job/available/{uploaded.Id}/pdf"))
+            {
+                check.Headers.Add("X-Execution-Lease", latest.LeaseId.ToString());
+                check.Headers.Add("X-Execution-Generation", latest.Generation.ToString());
+                using var result = await transport.SendAsync(check);
+                Assert.False(await result.Content.ReadFromJsonAsync<bool>());
+            }
+            remote.Process(file with { Pdf = differentPdf });
+            Assert.Equal(revised.PdfSha256, DownloadPipeline.Hash(File.ReadAllBytes(serverStorage.Resolve(revised.PdfPath!))));
+            Assert.Single(Directory.GetFiles(Path.Combine(directory, ".corrupt"), "*.pdf", SearchOption.AllDirectories));
+            var xml = Encoding.UTF8.GetBytes($"<factura><infoTributaria><ruc>{taxId}</ruc><claveAcceso>{key}</claveAcceso><estab>001</estab><ptoEmi>001</ptoEmi><secuencial>000000001</secuencial></infoTributaria><infoFactura><fechaEmision>12/09/2026</fechaEmision></infoFactura></factura>");
+            var wrongXml = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(xml).Replace(key, new string('9', 49)));
+            Assert.Equal(HttpStatusCode.BadRequest, Assert.Throws<HttpRequestException>(() => remote.Process(file with { Xml = wrongXml, Pdf = null })).StatusCode);
+            Assert.NotNull(remote.Process(file with { Xml = xml, Pdf = null }).XmlSha256);
             Assert.Single(repo.Read(s => s.Documents));
+            var redownloadRoot = Path.Combine(directory, "redownload");
+            var redownloadLock = Path.Combine(directory, "redownload.lock");
+            var localRemote = new RemoteOwnedExecution(transport, new RemoteWorker.Claim(latest.JobId, latest.LeaseId, latest.Generation), deliveryRoot: redownloadRoot, deliveryLock: redownloadLock);
+            var localPdf = Path.Combine(redownloadRoot, taxId, "2026", "09", "Facturas", key + ".pdf");
+            Assert.False(LocalDocumentAvailability.IsAvailable(redownloadRoot, taxId, revised, "pdf"));
+            Assert.True(localRemote.IsAvailable(revised, "pdf"));
+            Assert.True(LocalDocumentAvailability.IsAvailable(redownloadRoot, taxId, revised, "pdf"));
+            var withXml = repo.Read(s => s.Documents.Single(d => d.Id == revised.Id));
+            Assert.True(localRemote.IsAvailable(withXml, "xml"));
+            Assert.True(LocalDocumentAvailability.IsAvailable(redownloadRoot, taxId, withXml, "xml"));
+            await Assert.ThrowsAsync<InvalidDataException>(() => DeliveryAgent.Deliver(transport, redownloadRoot, oldDelivery, CancellationToken.None));
+            Assert.Equal(revised.PdfSha256, DownloadPipeline.Hash(await File.ReadAllBytesAsync(localPdf)));
+            Assert.True(localRemote.IsAvailable(revised, "pdf"));
+            File.Delete(localPdf);
+            Assert.False(LocalDocumentAvailability.IsAvailable(redownloadRoot, taxId, revised, "pdf"));
+            Assert.True(localRemote.IsAvailable(revised, "pdf"));
+            Assert.True(LocalDocumentAvailability.IsAvailable(redownloadRoot, taxId, revised, "pdf"));
+            Assert.Single(Directory.GetFiles(Path.GetDirectoryName(localPdf)!, "*.pdf"));
             await using (var portal = await FixtureServer.Start(SriEngineFixtureTests.Html))
             using (var playwright = await Playwright.CreateAsync())
             await using (var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true }))
             {
                 var page = await browser.NewPageAsync(); await page.GotoAsync(portal.Url);
                 var profile = SriEngineFixtureTests.Profile(); profile.Url = portal.Url; profile.Validate(true);
-                await new SriExecutionEngine(remote, remote).Run(page, profile, remote.Read(s => s.Executions.Single()), taxId, CancellationToken.None);
+                await new SriExecutionEngine(localRemote, localRemote).Run(page, profile, localRemote.Read(s => s.Executions.Single()), taxId, CancellationToken.None);
                 Assert.Equal(2, portal.Queries); Assert.True(portal.Files > 0);
             }
             Assert.Equal(2, repo.Read(s => s.Documents.Count));
@@ -204,6 +283,7 @@ public sealed class RemoteExecutionIntegrationTests
             Sql("UPDATE remote_deliveries SET created_at='2000-01-01T00:00:00Z' WHERE sha256='" + staleHash + "'");
             Assert.DoesNotContain(deliveries.Pending("tester"), d => d.Sha256 == staleHash);
             var desktop = Path.Combine(directory, "desktop"); var deliveryLock = Path.Combine(directory, "delivery.lock");
+            foreach (var document in documents) deliveries.Requeue("tester", document.Id, "pdf", document.PdfSha256!);
             await DeliveryAgent.PollOnce(transport, desktop, deliveryLock, CancellationToken.None);
             foreach (var document in documents)
                 Assert.True(File.Exists(Path.Combine(desktop, taxId, "2026", "09", "Facturas", document.AccessKey + ".pdf")));
@@ -215,8 +295,8 @@ public sealed class RemoteExecutionIntegrationTests
             await File.WriteAllTextAsync(conflict, "contenido distinto");
             Sql("UPDATE remote_deliveries SET status='Pending' WHERE document_id='" + documents[0].Id + "' AND kind='pdf'");
             await DeliveryAgent.PollOnce(transport, desktop, deliveryLock, CancellationToken.None);
-            Assert.Equal("contenido distinto", await File.ReadAllTextAsync(conflict));
-            Assert.Contains(deliveries.Pending("tester"), d => d.DocumentId == documents[0].Id && d.Attempts > 0);
+            Assert.Equal(documents[0].PdfSha256, DownloadPipeline.Hash(await File.ReadAllBytesAsync(conflict)));
+            Assert.DoesNotContain(deliveries.Pending("tester"), d => d.DocumentId == documents[0].Id && d.Kind == "pdf");
             var emptyDate = new DateOnly(2025, 1, 3);
             repo.Update(s => { s.Executions.Add(new() { Id = "empty", RequestedBy = "tester", Query = new(account, emptyDate, emptyDate, ["Facturas"], Pdf: true, Xml: false) }); return true; });
             using var emptyClaimResponse = await third.PostAsync("/execution-agent/v1/claim", null);

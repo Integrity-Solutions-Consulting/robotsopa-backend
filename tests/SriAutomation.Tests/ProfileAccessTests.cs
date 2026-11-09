@@ -4,6 +4,31 @@ using SriAutomation.Infrastructure;
 namespace SriAutomation.Tests;
 public sealed class ProfileAccessTests
 {
+    [Fact]
+    public void NavigationDiagnosticsNeverPersistUrlParametersOrUnrecognizedCodes()
+    {
+        var observation=AuthorizedQueryNavigation.SafeObservation("https://srienlinea.sri.gob.ec/auth/realms/example?token=SECRET#fragment", "LoginRequired");
+        Assert.Equal("NavigationObservation route=auth state=LoginRequired",observation);
+        Assert.Equal("NavigationObservation route=other state=Other",AuthorizedQueryNavigation.SafeObservation("https://example.com/SECRET", "SECRET"));
+    }
+    [Fact]
+    public void MenuDiagnosticsReportStructuralFailureWithoutMenuContents()
+    {
+        using var menu=System.Text.Json.JsonDocument.Parse("[{\"nombre\":\"PRIVATE\"}]");
+        var events=new List<string>();
+        var error=Assert.Throws<PortalRecognitionException>(()=>ProductionMenuEntry.Resolve(menu.RootElement,events.Add));
+        Assert.Equal("QueryNavigationFailed",error.Code);
+        Assert.Equal(new[]{"MenuNode name=billing matches=zero"},events);
+    }
+    [BrowserFact]
+    public async Task MenuDiagnosticsReportHttpFailureWithoutResponseContents()
+    {
+        using var p=await Playwright.CreateAsync();await using var browser=await p.Chromium.LaunchAsync(new(){Headless=true});var page=await browser.NewPageAsync();
+        await page.RouteAsync("https://srienlinea.sri.gob.ec/**",r=>r.FulfillAsync(new(){Status=r.Request.Url.Contains("/rest/menu/")?503:200,ContentType="text/html",Body="PRIVATE"}));
+        await page.GotoAsync("https://srienlinea.sri.gob.ec/sri-en-linea/contribuyente/perfil");var events=new List<string>();
+        var error=await Assert.ThrowsAsync<PortalRecognitionException>(()=>ProductionMenuEntry.Resolve(page,events.Add));
+        Assert.Equal("QueryNavigationFailed",error.Code);Assert.Equal(new[]{"MenuFetch started","MenuResolution error=http-non-success"},events);
+    }
     internal const string Menu="""[{"nombre":"Facturación Electrónica","items":[{"nombre":"Producción","items":[{"nombre":"Consultas","urlDestino":"https://srienlinea.sri.gob.ec/tuportal-internet/accederAplicacion.jspa?redireccion=60&idGrupo=58"}]}]}]""";
     [Fact]
     public void ProductionEntryUsesPublishedMenuAndRejectsAnotherOriginOrFabricatedToken()

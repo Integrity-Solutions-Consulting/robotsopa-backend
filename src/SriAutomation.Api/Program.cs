@@ -35,6 +35,8 @@ builder.Services.AddSingleton<IStateRepository>(_ => postgresConnection is null 
 builder.Services.AddSingleton<IPanelDatabase>(_ => postgresConnection is null ? new PanelDatabase(Environment.GetEnvironmentVariable("SRI_STATE_PATH") ?? Path.GetFullPath("storage")) : new PostgresPanelDatabase(postgresConnection));
 builder.Services.AddSingleton<IStorageProvider>(services=>new DocumentStorage(output,()=>services.GetRequiredService<IStateRepository>().Read(s=>s.Settings.DownloadSubfolder)));
 builder.Services.AddSingleton<IDocumentParser, XmlDocumentParser>();
+if (postgresConnection is not null) builder.Services.AddSingleton<IZipJobStore>(new PostgresZipJobStore(postgresConnection));
+builder.Services.AddSingleton<DocumentZipService>();
 builder.Services.AddEndpointsApiExplorer(); builder.Services.AddSwaggerGen(); builder.Services.AddHealthChecks().AddCheck<SriAutomation.Api.StorageHealthCheck>("storage");
 builder.Services.AddRateLimiter(o => o.AddFixedWindowLimiter("login", x => { x.PermitLimit = 10; x.Window = TimeSpan.FromMinutes(1); x.QueueLimit = 0; }));
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20_000_000);
@@ -47,7 +49,7 @@ if (isolatedTlsProxy) app.Use((context, next) => { IsolatedTlsProxy.Apply(contex
 app.UseCors();
 var database = app.Services.GetRequiredService<IPanelDatabase>();
 if (postgresConnection is null) { database.Initialize(adminUsername!, password!); database.SyncAudit(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Audit.ToList())); database.SyncAccounts(app.Services.GetRequiredService<IStateRepository>().Read(s => s.Accounts.ToList())); }
-else PostgresAdministration.Verify(postgresConnection);
+else { PostgresAdministration.Verify(postgresConnection); PostgresAdministration.VerifyZipSchema(postgresConnection); }
 var sessions = new ConcurrentDictionary<string, (DateTimeOffset Expiry, string User, string Role, bool MustChange)>();
 app.Use(async (context, next) =>
 {
@@ -74,10 +76,15 @@ app.Use(async (context, next) =>
     catch (BadHttpRequestException) { await Results.Problem("Solicitud invÃ¡lida. Revise los campos admitidos.",statusCode:400).ExecuteAsync(context); }
     catch (IOException ex) { app.Logger.LogError("Publish/storage failure type={Type} path={Path}", ex.GetType().Name, context.Request.Path); await Results.Problem("Almacenamiento ocupado o no disponible. Reintente.", statusCode: 503).ExecuteAsync(context); }
     catch (Exception ex) { app.Logger.LogError("Error interno de tipo {Type}", ex.GetType().Name); await Results.Problem("Error interno.", statusCode: 500).ExecuteAsync(context); }
-    finally { AuditEndpoints.RecordRequest(context, app.Services.GetRequiredService<IStateRepository>()); }
+    finally
+    {
+        if (context.Request.Method == "POST" && context.Request.Path.StartsWithSegments("/execution-agent/v1") && context.Request.Path.Value?.EndsWith("/files", StringComparison.Ordinal) == true && context.Response.StatusCode == 400 && !context.Items.ContainsKey("FileRejectionLogged"))
+            app.Logger.LogWarning("Remote file failed: code={Code}", "REQUEST_BINDING_OR_OTHER");
+        AuditEndpoints.RecordRequest(context, app.Services.GetRequiredService<IStateRepository>());
+    }
 });
 app.UseRateLimiter(); if (app.Environment.IsDevelopment()) { app.UseSwagger(); app.UseSwaggerUI(); } app.MapHealthChecks("/health");
-app.MapGet("/health/ready", () => { try { if (postgresConnection is null) return Results.StatusCode(503); PostgresAdministration.Verify(postgresConnection); return Results.Ok(); } catch { return Results.StatusCode(503); } });
+app.MapGet("/health/ready", () => { try { if (postgresConnection is null) return Results.StatusCode(503); PostgresAdministration.Verify(postgresConnection); PostgresAdministration.VerifyZipSchema(postgresConnection); return Results.Ok(); } catch { return Results.StatusCode(503); } });
 if (postgresConnection is not null)
     app.Services.GetRequiredService<IStateRepository>().Read(s => {
         if (s.Accounts.Any(a => !a.IsTest && a.Id.StartsWith("qa-", StringComparison.Ordinal) && a.Name.StartsWith("QA FICTICIA", StringComparison.Ordinal)))
@@ -93,6 +100,8 @@ if(s.AuthenticationMode!="EncryptedProfilesV4") {
  s.AuthenticationMode="EncryptedProfilesV4";
 } return true; });
 var api = app.MapGroup("/api/v1");
+if (postgresConnection is not null) _ = app.Services.GetRequiredService<DocumentZipService>();
+DocumentExplorerEndpoints.Map(api, database);
 if (postgresConnection is not null)
 {
     var agentCredentials = new DeliveryAgentCredentials(postgresConnection);
@@ -303,7 +312,15 @@ api.MapGet("/documents/{id}/{extension}", async (string id, string extension, IS
         if (DownloadPipeline.Hash(bytes) != remote.Sha256) throw new InvalidDataException("El archivo remoto no supera la comprobaciÃ³n de integridad.");
         return Results.File(bytes, extension == "xml" ? "application/xml" : "application/pdf", Path.GetFileName(path));
     }
-    return Results.File(storage.Resolve(path), extension == "xml" ? "application/xml" : "application/pdf", Path.GetFileName(path));
+    var expected = extension == "xml" ? doc.XmlSha256 : doc.PdfSha256;
+    if (string.IsNullOrWhiteSpace(expected)) return Results.Conflict(new { detail = "No hay hash registrado para verificar este archivo histórico." });
+    var file = new FileStream(storage.Resolve(path), FileMode.Open, FileAccess.Read, FileShare.Read);
+    try {
+        var actual = Convert.ToHexStringLower(SHA256.HashData(file));
+        if (!string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase)) { file.Dispose(); return Results.Conflict(new { detail = "El archivo no supera la comprobación de integridad." }); }
+        file.Position = 0;
+        return Results.File(file, extension == "xml" ? "application/xml" : "application/pdf", Path.GetFileName(path));
+    } catch { file.Dispose(); throw; }
 });
 api.MapPost("/reports", (ReportRequest request, IStateRepository r, IStorageProvider storage,HttpContext c) =>
 {
@@ -313,33 +330,22 @@ api.MapPost("/reports", (ReportRequest request, IStateRepository r, IStorageProv
     var documents = r.Read(s => s.Documents.Where(d => d.Account == request.Account).ToList()); var paths = new List<string>();
     foreach (var period in documents.Where(d => d.Issued >= from && d.Issued <= to.AddMonths(1).AddDays(-1)).Select(d => (d.Issued.Year, d.Issued.Month)).Distinct().OrderBy(x => x.Year).ThenBy(x => x.Month))
     {
-        var path = storage.Report(request.Account, period.Year, period.Month, documents);
-        paths.Add(path);
-        if (postgresConnection is not null)
+        var published = MonthlyReportPublication.Generate(storage, r, request.Account, period.Year, period.Month, documents, (snapshot, hash) =>
         {
+          if (postgresConnection is not null)
+          {
             var account = r.Read(s => s.Accounts.Single(a => a.Id == request.Account));
             var taxId = account.TaxId ?? account.Id;
             if (taxId.Length == 13 && taxId.All(char.IsAsciiDigit))
             {
-                var bytes = File.ReadAllBytes(storage.Resolve(path));
-                var hash = DownloadPipeline.Hash(bytes);
-                var snapshot = Path.Combine(".deliveries", hash + ".xlsx");
-                var snapshotPath = storage.Resolve(snapshot);
-                Directory.CreateDirectory(Path.GetDirectoryName(snapshotPath)!);
-                var temporary = snapshotPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                try
-                {
-                    using (var file = new FileStream(temporary, FileMode.CreateNew, FileAccess.Write, FileShare.None)) { file.Write(bytes); file.Flush(true); }
-                    try { File.Move(temporary, snapshotPath, false); }
-                    catch (IOException) when (File.Exists(snapshotPath) && DownloadPipeline.Hash(File.ReadAllBytes(snapshotPath)) == hash) { }
-                }
-                finally { if (File.Exists(temporary)) File.Delete(temporary); }
                 var name = $"Resumen_{period.Year:D4}_{period.Month:D2}.xlsx";
                 new RemoteDeliveryStore(postgresConnection).Enqueue((string)c.Items["PanelUser"]!, request.Account,
                     $"report-{request.Account}-{period.Year:D4}-{period.Month:D2}", "xlsx", snapshot,
                     $"{taxId}/{period.Year:D4}/{period.Month:D2}/Reportes/{name}", hash);
             }
-        }
+          }
+        });
+        paths.Add(published.Path);
     }
     return new { paths };
 });

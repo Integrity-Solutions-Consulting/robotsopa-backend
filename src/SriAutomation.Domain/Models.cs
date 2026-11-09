@@ -20,6 +20,7 @@ public sealed class Execution
     public int Processed { get; set; }
     public int Found { get; set; }
     public int Errors { get; set; }
+    public int Reviews { get; set; }
     public int Attempts { get; set; }
     public string? Checkpoint { get; set; }
     public string? Message { get; set; }
@@ -29,12 +30,15 @@ public sealed class Execution
     public List<string> Issues { get; set; } = [];
     public List<string> AttemptedKeys { get; set; } = [];
     public string? RequestedBy { get; set; }
+    // Set by the server on each claim, never accepted from a state update.
+    public bool CentralStorageAgent { get; set; }
     public int DeliveryTotal { get; set; }
     public int DeliveryCompleted { get; set; }
     public string? DeliveryError { get; set; }
 }
 public sealed record ExecutionEvent(DateTimeOffset At,string Stage,string Message);
 public sealed record ExecutionReport(int Year,int Month,string Path);
+public sealed record PublishedMonthlyReport(string Account, int Year, int Month, string Path, string Sha256, DateTimeOffset PublishedAt);
 public sealed class Voucher
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -42,6 +46,7 @@ public sealed class Voucher
     public string Type { get; set; } = "";
     public string AccessKey { get; set; } = "";
     public string? IssuerTaxId { get; set; }
+    public string? IssuerName { get; set; }
     public string? Number { get; set; }
     public string? Authorization { get; set; }
     public string? AuthorizedAt { get; set; }
@@ -49,16 +54,23 @@ public sealed class Voucher
     public string? Identification { get; set; }
     public DateOnly Issued { get; set; }
     public decimal? Subtotal { get; set; }
+    public decimal? Discount { get; set; }
     public decimal? Taxes { get; set; }
     public decimal? Total { get; set; }
     public string? PdfPath { get; set; }
     public string? XmlPath { get; set; }
     public string Status { get; set; } = "Pendiente";
     public string? Warning { get; set; }
+    public Dictionary<string, FieldEvidence> FieldEvidence { get; set; } = new();
     public string Source { get; set; } = "Imported";
     public string? XmlSha256 { get; set; }
     public string? PdfSha256 { get; set; }
+    public long PdfGeneration { get; set; } = 1;
+    public long XmlGeneration { get; set; } = 1;
+    public List<PdfVersion> PdfHistory { get; set; } = [];
 }
+public sealed record FieldEvidence(string Source, string Confidence);
+public sealed record PdfVersion(string Path, string Sha256, DateTimeOffset ReplacedAt);
 public sealed record SriCheckpoint(DateOnly Date, string Type, int Page, int Row, bool Complete = false);
 public sealed record QueryResult(DateOnly Date, string Type, int Found, int Downloaded, int Errors, string Status);
 public sealed class LocalDelivery
@@ -121,6 +133,7 @@ public sealed class State
     public List<Account> Accounts { get; set; } = [];
     public List<Query> Configurations { get; set; } = [];
     public List<Execution> Executions { get; set; } = [];
+    public List<PublishedMonthlyReport> PublishedReports { get; set; } = [];
     public List<Voucher> Documents { get; set; } = [];
     public List<SharePointUpload> SharePointUploads { get; set; } = [];
     public List<LocalDelivery> LocalDeliveries { get; set; } = [];

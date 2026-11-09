@@ -25,7 +25,20 @@ public sealed class PdfVoucherParser
         var matches = Regex.Matches(text, @"(?im)^[\t ]*(?:" + label + @")" + separator + "(" + capture + @")[\t ]*$", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
         return matches.Count == 1 ? matches[0].Groups[1].Value.Trim() : null;
     }
-    public static string? AccessKey(string text) => Field(text, @"CLAVE\s+DE\s+ACCESO", @"(?:\d[ -]*){49}") is { } raw ? new string(raw.Where(char.IsAsciiDigit).ToArray()) : null;
+    public static string? AccessKey(string text)
+    {
+        var explicitKey = Field(text, @"CLAVE\s+DE\s+ACCESO", @"(?:[0-9][ -]*){49}");
+        if (explicitKey is not null) return new string(explicitKey.Where(char.IsAsciiDigit).ToArray());
+
+        // Some RIDE PDFs expose the full access key as the authorization number,
+        // while the separately labelled access key is graphical or not extracted.
+        // Do not infer identity from the row: require a unique labelled 49-digit
+        // value in the PDF and reject conflicting complete identifiers in its text.
+        var authorization = Field(text, @"N[ÚU]MERO\s+DE\s+AUTORIZACI[ÓO]N", @"[0-9]{49}");
+        if (authorization is null) return null;
+        var identifiers = Regex.Matches(text, @"(?<![0-9])(?:[0-9][ -]*){48}[0-9](?![0-9])", RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1));
+        return identifiers.Cast<Match>().All(m => new string(m.Value.Where(char.IsAsciiDigit).ToArray()) == authorization) ? authorization : null;
+    }
     public Voucher Parse(string account, string type, string key, DateOnly issued, byte[] pdf)
     {
         var text = ReadText(pdf);
@@ -54,7 +67,9 @@ public sealed class PdfVoucherParser
             Recipient = Field(text, recipientLabel),
             Identification = Field(text, @"IDENTIFICACI[ÓO]N(?:\s+DEL\s+RECEPTOR)?", @"[A-Za-z0-9-]+"),
             IssuerTaxId = Field(text, @"R\.?U\.?C\.?", @"\d{13}"),
+            IssuerName = Field(text, @"RAZ[ÓO]N\s+SOCIAL\s+(?:DEL\s+)?EMISOR"),
             Subtotal = type == "Retenciones" ? null : Money(@"SUBTOTAL\s+SIN\s+IMPUESTOS"),
+            Discount = type == "Retenciones" ? null : Money(@"TOTAL\s+DESCUENTO|DESCUENTO\s+TOTAL"),
             Taxes = type == "Retenciones" ? null : Money(@"TOTAL\s+IMPUESTOS"),
             Total = Money(type == "Retenciones" ? @"TOTAL\s+RETENIDO" : type == "Notas-Credito" ? @"VALOR\s+(?:DE\s+)?MODIFICACI[ÓO]N" : @"IMPORTE\s+TOTAL|VALOR\s+TOTAL|TOTAL\s+PAGADO"),
             Status = "Revisar",
