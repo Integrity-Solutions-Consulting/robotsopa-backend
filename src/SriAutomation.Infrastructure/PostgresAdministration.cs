@@ -22,6 +22,31 @@ public static class PostgresAdministration
             using var reader = new StreamReader(stream); using var cmd = new NpgsqlCommand(reader.ReadToEnd(), db); cmd.ExecuteNonQuery();
         }
     }
+    // Read-only compatibility check; schema changes are applied manually.
+    public static void VerifyZipSchema(string connectionString)
+    {
+        using var db = new NpgsqlConnection(connectionString); db.Open();
+        using var relation = new NpgsqlCommand("SELECT to_regclass('document_zip_jobs') IS NOT NULL", db);
+        if (relation.ExecuteScalar() is not true) throw new InvalidOperationException("Falta document_zip_jobs. Aplique manualmente el script SQL de CloudBeaver en la base existente.");
+        (string Name, string Type)[] columns = [
+            ("id","uuid"), ("username","text"), ("account_id","text"), ("selection","jsonb"), ("signature","text"), ("status","text"),
+            ("expected","integer"), ("processed","integer"), ("omitted","integer"), ("issues","jsonb"), ("warnings","jsonb"),
+            ("archive_name","text"), ("archive_sha256","text"), ("archive_size","bigint"), ("instance_id","uuid"), ("lease_id","uuid"),
+            ("lease_generation","bigint"), ("lease_expires_at","timestamp with time zone"), ("created_at","timestamp with time zone"),
+            ("expires_at","timestamp with time zone"), ("updated_at","timestamp with time zone") ];
+        foreach (var (name, type) in columns) {
+            using var check = new NpgsqlCommand("SELECT format_type(atttypid,atttypmod) FROM pg_attribute WHERE attrelid=to_regclass('document_zip_jobs') AND attname=@name AND attnum>0 AND NOT attisdropped", db);
+            check.Parameters.AddWithValue("name", name);
+            if (check.ExecuteScalar() as string != type) throw new InvalidOperationException($"Esquema ZIP incompatible: revise document_zip_jobs.{name} (tipo esperado {type}).");
+        }
+        foreach (var permission in new[] { "SELECT", "INSERT", "UPDATE" }) {
+            using var check = new NpgsqlCommand("SELECT has_table_privilege(to_regclass('document_zip_jobs'),@permission)", db);
+            check.Parameters.AddWithValue("permission", permission);
+            if (check.ExecuteScalar() is not true) throw new InvalidOperationException($"Permiso PostgreSQL ausente: {permission} en document_zip_jobs.");
+        }
+        using var primary = new NpgsqlCommand("SELECT EXISTS (SELECT 1 FROM pg_index WHERE indrelid=to_regclass('document_zip_jobs') AND indisprimary AND indnkeyatts=1 AND pg_get_indexdef(indexrelid,1,true)='id')", db);
+        if (primary.ExecuteScalar() is not true) throw new InvalidOperationException("Esquema ZIP incompatible: falta la clave primaria de id.");
+    }
     public static void Verify(string connectionString)
     {
         using var db = new NpgsqlConnection(connectionString); db.Open();

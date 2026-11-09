@@ -8,10 +8,10 @@ public static class AuthorizedQueryNavigation
 {
     // An SSO bridge may replace or close its tab. The authenticated context, rather than
     // one captured IPage reference, owns the operation. Never submit query filters here.
-    public static async Task<IPage> Open(IPage accountPage,BoundSriSession session,string taxId,CancellationToken cancellation,int timeoutMs=45000,Func<IPage,Task<bool>>? authenticate=null,Func<IPage,Task>? humanAction=null)
+    public static async Task<IPage> Open(IPage accountPage,BoundSriSession session,string taxId,CancellationToken cancellation,int timeoutMs=45000,Func<IPage,Task<bool>>? authenticate=null,Func<IPage,Task>? humanAction=null,Action<string>? diagnostic=null)
     {
         var context=accountPage.Context;var watch=Stopwatch.StartNew();var total=Stopwatch.StartNew();var clicked=new HashSet<string>();var submitted=new HashSet<IPage>();var notified=new HashSet<IPage>();
-        var attempted=false;var reason="QueryNavigationFailed";
+        var attempted=false;var reason="QueryNavigationFailed";var lastDiagnostic="";
         while(watch.ElapsedMilliseconds<timeoutMs&&total.Elapsed<TimeSpan.FromMinutes(10)){
             cancellation.ThrowIfCancellationRequested();
             var waitingForHuman=false;
@@ -19,6 +19,8 @@ public static class AuthorizedQueryNavigation
                 try{
                     if(!await InteractiveNavigation.IsOfficialDocument(page))continue;
                     var check=await session.Inspect(page,taxId);
+                    var observation=SafeObservation(page.Url,check.Code);
+                    if(observation!=lastDiagnostic){diagnostic?.Invoke(observation);lastDiagnostic=observation;}
                     if(!check.Verified){
                         reason=check.Code=="LoginRequired"&&submitted.Contains(page)?"LoginNotConfirmed":check.Code;
                         if(check.Code=="SsoRequestRejected")throw new PortalRecognitionException(check.Code);
@@ -46,16 +48,29 @@ public static class AuthorizedQueryNavigation
                 attempted=true;
                 var source=context.Pages.FirstOrDefault(p=>!p.IsClosed&&Uri.TryCreate(p.Url,UriKind.Absolute,out var u)&&u.Host=="srienlinea.sri.gob.ec");
                 if(source is null){await Task.Delay(300,cancellation);attempted=false;continue;}
-                var entry=await ProductionMenuEntry.Resolve(source);
+                diagnostic?.Invoke("NavigationMenu resolving");
+                var entry=await ProductionMenuEntry.Resolve(source,diagnostic);
                 var query=await context.NewPageAsync();
-                try{await query.GotoAsync(entry,new(){WaitUntil=WaitUntilState.Commit,Timeout=20000});}
-                catch(PlaywrightException)when(!cancellation.IsCancellationRequested){/* Retain the original authorized account tab. */}
-                catch(TimeoutException){reason="QueryNavigationFailed";}
+                diagnostic?.Invoke("NavigationEntry opening");
+                try{await query.GotoAsync(entry,new(){WaitUntil=WaitUntilState.Commit,Timeout=20000});diagnostic?.Invoke("NavigationEntry committed");}
+                catch(PlaywrightException)when(!cancellation.IsCancellationRequested){diagnostic?.Invoke("NavigationEntry browser-error");/* Retain the original authorized account tab. */}
+                catch(TimeoutException){diagnostic?.Invoke("NavigationEntry timeout");reason="QueryNavigationFailed";}
             }
             if(waitingForHuman)watch.Stop();else watch.Start();
             await Task.Delay(300,cancellation);
         }
+        diagnostic?.Invoke("NavigationTimeout reason="+AccessCode(reason));
         throw new PortalRecognitionException(AccessCode(reason));
+    }
+    public static string SafeObservation(string url,string code)
+    {
+        var route="other";
+        if(Uri.TryCreate(url,UriKind.Absolute,out var uri)&&uri.Scheme=="https"&&uri.Host=="srienlinea.sri.gob.ec"&&uri.IsDefaultPort){
+            var path=uri.AbsolutePath;
+            route=path.StartsWith("/auth/",StringComparison.OrdinalIgnoreCase)?"auth":path.StartsWith("/comprobantes-electronicos-internet/pages/consultas/",StringComparison.OrdinalIgnoreCase)?"query":path.Equals("/sri-en-linea/contribuyente/perfil",StringComparison.OrdinalIgnoreCase)?"profile":path.Equals("/tuportal-internet/accederAplicacion.jspa",StringComparison.OrdinalIgnoreCase)?"application-entry":path.StartsWith("/tuportal-internet/",StringComparison.OrdinalIgnoreCase)?"portal-bridge":"official-other";
+        }
+        var safeCode=code is "Verified" or "HumanChallenge" or "LoginRequired" or "LoginNotConfirmed" or "AutomaticLoginUnavailable" or "SsoRequestRejected" or "IdentityMismatch" or "QueryAccountMissing" or "UnrecognizedSession" or "UnofficialOrigin" or "InvalidAccount" or "QueryNavigationFailed" or "QuerySectionMissing" or "QueryTypeMissing" or "QuerySearchMissing" or "QueryDateMissing"?code:"Other";
+        return "NavigationObservation route="+route+" state="+safeCode;
     }
     private static string AccessCode(string code)=>code is "HumanChallenge" or "LoginRequired" or "LoginNotConfirmed" or "IdentityMismatch" or "QueryAccountMissing"?code:"QueryNavigationFailed";
 }

@@ -64,7 +64,9 @@ public sealed class DocumentStorage : IStorageProvider
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
         return relative;
     }
-    public string Report(string account, int year, int month, IEnumerable<Voucher> documents)
+    public string Report(string account, int year, int month, IEnumerable<Voucher> documents) => GenerateReport(account, year, month, documents, false).Path;
+    public (string Path, byte[] Bytes) ReportSnapshot(string account, int year, int month, IEnumerable<Voucher> documents) => GenerateReport(account, year, month, documents, true);
+    private (string Path, byte[] Bytes) GenerateReport(string account, int year, int month, IEnumerable<Voucher> documents, bool snapshot)
     {
         _ = new DateOnly(year, month, 1);
         var directory = Resolve(Path.Combine(year.ToString("D4"), ".report-" + Validation.Identifier(account)));
@@ -141,6 +143,6 @@ public sealed class DocumentStorage : IStorageProvider
             File.Move(temporary, path, true);
         }
         finally { if (File.Exists(temporary)) File.Delete(temporary); }
-        return relative;
+        return (relative, snapshot ? File.ReadAllBytes(path) : []);
     }
 }

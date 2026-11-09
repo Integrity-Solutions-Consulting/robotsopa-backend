@@ -55,7 +55,7 @@ public static class Validation
         var blocking = state.Executions.FirstOrDefault(e => e.Query.Account == query.Account && e.Status is "Pending" or "Running");
         if (blocking is not null)
             throw new ArgumentException($"La cuenta ya tiene una ejecución pendiente o activa: {blocking.Id} ({blocking.Status}).");
-        var execution = new Execution { Query = query.Mode == "Sri" ? query with { Pdf = true, Xml = false } : query };
+        var execution = new Execution { Query = query };
         state.Executions.Add(execution);
         return execution;
     }

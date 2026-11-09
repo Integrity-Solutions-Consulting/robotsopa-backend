@@ -4,7 +4,7 @@ using SriAutomation.Domain;
 
 namespace SriAutomation.Infrastructure;
 
-public sealed class DownloadPipeline(IStateRepository repository, IStorageProvider storage, IDocumentParser parser, OwnedContentStore? ownedContent = null, Action<string>? stage = null) : IDownloadPipeline
+public sealed class DownloadPipeline(IStateRepository repository, IStorageProvider storage, IDocumentParser parser, OwnedContentStore? ownedContent = null, Action<string>? stage = null, bool onlyIfMissingOrSame = false) : IDownloadPipeline
 {
     public bool IsAvailable(Voucher document, string extension)
     {
@@ -63,6 +63,10 @@ public sealed class DownloadPipeline(IStateRepository repository, IStorageProvid
         return repository.Update(s =>
         {
             var existing = s.Documents.SingleOrDefault(d => d.Account == document.Account && d.Type == document.Type && d.AccessKey == document.AccessKey);
+            if (onlyIfMissingOrSame && existing is not null &&
+                (download.Pdf is not null && existing.PdfSha256 is not null && existing.PdfSha256 != Hash(download.Pdf) ||
+                 download.Xml is not null && existing.XmlSha256 is not null && existing.XmlSha256 != Hash(download.Xml)))
+                throw new ArgumentException("La versión vigente difiere de la transferencia pendiente.");
             if (existing is null) { s.Documents.Add(document); UpdateReviews(s, document); return document; }
             if (existing.Issued != document.Issued) throw new ArgumentException("La fecha histórica no coincide con el documento.");
             if (existing.XmlSha256 is not null && document.XmlSha256 is not null && existing.XmlSha256 != document.XmlSha256) throw new ArgumentException("Colisión de integridad en el manifiesto.");

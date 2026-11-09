@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Diagnostics;
 using Microsoft.Playwright;
 using SriAutomation.Application;
 using SriAutomation.Domain;
@@ -32,7 +33,9 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                     if (remaining > TimeSpan.Zero) await Task.Delay(remaining, cancellation); // Limitación explícita de frecuencia, no espera de DOM.
                 }
                 Stage("Querying");
+                var queryTimer = Stopwatch.StartNew();
                 await portal.Search(query, date, type, cancellation); previousQuery = DateTimeOffset.UtcNow;
+                profile.TraceStep?.Invoke($"Timing queryMs={queryTimer.ElapsedMilliseconds}");
                 await session.Ensure(page, taxId);
                 var previous = execution.Queries.SingleOrDefault(q => q.Date == date && q.Type == type);
                 var count = 0; var downloadedCount = previous?.Downloaded ?? 0; var errors = previous?.Errors ?? 0; var pageNumber = 0;
@@ -40,11 +43,13 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                 var seenPages = new HashSet<string>(StringComparer.Ordinal);
                 while (true)
                 {
+                    var pageTimer = Stopwatch.StartNew();
                     var rows = await portal.Rows();
                     if (!seenPages.Add(string.Join("|", rows.Select(r => r.Key)))) throw new InvalidDataException("La paginación repitió una página; se detuvo para evitar un bucle.");
                     for (var rowIndex = 0; rowIndex < rows.Count; rowIndex++)
                     {
                         var row = rows[rowIndex];
+                        var rowTimer = Stopwatch.StartNew();
                         profile.TraceStep?.Invoke($"DownloadRow page={pageNumber + 1} row={rowIndex + 1}");
                         await portal.TraceRowStructure(row);
                         if (!seenKeys.Add(row.Key)) { profile.TraceStep?.Invoke("DownloadRowSkipped Duplicate"); continue; }
@@ -59,13 +64,15 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                         profile.TraceStep?.Invoke("DownloadRowSessionConfirmed");
                         profile.TraceStep?.Invoke("DownloadRowCheckingAvailability");
                         Voucher? existing; bool needXml, needPdf;
+                        var availabilityTimer = Stopwatch.StartNew();
                         try {
                             existing = repository.Read(s => s.Documents.SingleOrDefault(d => d.Account == query.Account && d.Type == type && d.AccessKey == row.Key));
                             needXml = query.Xml && (existing is null || !downloads.IsAvailable(existing, "xml"));
                             needPdf = query.Pdf && (existing is null || !downloads.IsAvailable(existing, "pdf"));
                         } catch (Exception ex) { profile.TraceStep?.Invoke($"DownloadAvailabilityError {ex.GetType().Name}"); throw; }
+                        profile.TraceStep?.Invoke($"Timing availabilityMs={availabilityTimer.ElapsedMilliseconds}");
                         profile.TraceStep?.Invoke($"DownloadRowDecision pdfRequested={query.Pdf} xmlRequested={query.Xml} existing={existing is not null} pdfNeeded={needPdf} xmlNeeded={needXml}");
-                        if (!needXml && !needPdf) { profile.TraceStep?.Invoke("DownloadRowSkipped NoFilesNeeded"); SaveCheckpoint(new(date, type, pageNumber, rowIndex + 1)); continue; }
+                        if (!needXml && !needPdf) { profile.TraceStep?.Invoke("DownloadRowSkipped NoFilesNeeded"); SaveCheckpoint(new(date, type, pageNumber, rowIndex + 1)); profile.TraceStep?.Invoke($"Timing rowMs={rowTimer.ElapsedMilliseconds}"); continue; }
                         profile.TraceStep?.Invoke("DownloadRowPreparingAttempt");
                         repository.Update(s => {
                             var e = s.Executions.Single(e => e.Id == execution.Id);
@@ -76,9 +83,19 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                         {
                             byte[]? xml = null, pdf = null;
                             Stage("Downloading");
+                            var downloadTimer = Stopwatch.StartNew();
                             var transferIssues = new List<string>();
-                            if (needXml) try { xml = await portal.Download(row, "xml", cancellation); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga XML fallida."); }
-                            if (needPdf) try { pdf = await portal.Download(row, "pdf", cancellation); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga PDF fallida."); }
+                            if (needXml) {
+                                xml = downloads.Pending(query.Account, type, row.Key, row.Issued, "xml");
+                                if (xml is null) try { xml = await portal.Download(row, "xml", cancellation); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga XML fallida."); }
+                                if (xml is not null) downloads.Preserve(query.Account, type, row.Key, row.Issued, "xml", xml);
+                            }
+                            if (needPdf) {
+                                pdf = downloads.Pending(query.Account, type, row.Key, row.Issued, "pdf");
+                                if (pdf is null) try { pdf = await portal.Download(row, "pdf", cancellation); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga PDF fallida."); }
+                                if (pdf is not null) downloads.Preserve(query.Account, type, row.Key, row.Issued, "pdf", pdf);
+                            }
+                            profile.TraceStep?.Invoke($"Timing downloadMs={downloadTimer.ElapsedMilliseconds}");
                             Stage("Processing");
                             var document = downloads.Process(new(query.Account, type, row.Key, row.Issued, xml, pdf));
                             profile.TraceStep?.Invoke($"DownloadFilesProcessed xml={xml is not null} pdf={pdf is not null}");
@@ -102,7 +119,9 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                         }
                         SaveCheckpoint(new(date, type, pageNumber, rowIndex + 1));
                         Progress("Running");
+                        profile.TraceStep?.Invoke($"Timing rowMs={rowTimer.ElapsedMilliseconds}");
                     }
+                    profile.TraceStep?.Invoke($"Timing pageMs={pageTimer.ElapsedMilliseconds} rows={rows.Count}");
                     cancellation.ThrowIfCancellationRequested(); await session.Ensure(page, taxId);
                     if (!await portal.Next(cancellation)) break;
                     pageNumber++;

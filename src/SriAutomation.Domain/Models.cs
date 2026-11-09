@@ -30,12 +30,15 @@ public sealed class Execution
     public List<string> Issues { get; set; } = [];
     public List<string> AttemptedKeys { get; set; } = [];
     public string? RequestedBy { get; set; }
+    // Set by the server on each claim, never accepted from a state update.
+    public bool CentralStorageAgent { get; set; }
     public int DeliveryTotal { get; set; }
     public int DeliveryCompleted { get; set; }
     public string? DeliveryError { get; set; }
 }
 public sealed record ExecutionEvent(DateTimeOffset At,string Stage,string Message);
 public sealed record ExecutionReport(int Year,int Month,string Path);
+public sealed record PublishedMonthlyReport(string Account, int Year, int Month, string Path, string Sha256, DateTimeOffset PublishedAt);
 public sealed class Voucher
 {
     public string Id { get; set; } = Guid.NewGuid().ToString("N");
@@ -130,6 +133,7 @@ public sealed class State
     public List<Account> Accounts { get; set; } = [];
     public List<Query> Configurations { get; set; } = [];
     public List<Execution> Executions { get; set; } = [];
+    public List<PublishedMonthlyReport> PublishedReports { get; set; } = [];
     public List<Voucher> Documents { get; set; } = [];
     public List<SharePointUpload> SharePointUploads { get; set; } = [];
     public List<LocalDelivery> LocalDeliveries { get; set; } = [];
