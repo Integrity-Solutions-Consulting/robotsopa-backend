@@ -19,9 +19,12 @@ public sealed class RemoteFileTraceTests
         var agent = new RemoteOwnedExecution(client, new RemoteWorker.Claim("job", Guid.NewGuid(), 1), events.Add);
         var input = new DownloadedVoucher("synthetic", "Facturas", new string('1', 49), new DateOnly(2026, 9, 12), null, [1, 2, 3]);
         if (status == 200) Assert.NotNull(agent.Process(input));
-        else Assert.Throws<HttpRequestException>(() => agent.Process(input));
+        else if (status is 500 or 503) Assert.Throws<IOException>(() => agent.Process(input));
+        else Assert.Equal((HttpStatusCode)status, Assert.Throws<HttpRequestException>(() => agent.Process(input)).StatusCode);
         Assert.Equal("ARCHIVO_ENVIADO_API", events[0]);
         Assert.Contains($"FileApiStatus status={status}", events);
+        Assert.Equal(status is 500 or 503 ? 3 : 1, events.Count(e => e == "ARCHIVO_ENVIADO_API"));
+        Assert.Equal(status is 500 or 503 ? 3 : 1, events.Count(e => e == $"FileApiStatus status={status}"));
         Assert.Equal(status == 200, events.Contains("ARCHIVO_CONFIRMADO_API"));
         Assert.DoesNotContain(events, e => e.Contains(input.Key, StringComparison.Ordinal) || e.Contains("private", StringComparison.Ordinal));
     }
@@ -32,7 +35,9 @@ public sealed class RemoteFileTraceTests
         using var client = new HttpClient(new Handler(0)) { BaseAddress = new Uri("https://fixture.invalid") };
         var agent = new RemoteOwnedExecution(client, new RemoteWorker.Claim("job", Guid.NewGuid(), 1), events.Add);
         Assert.Throws<HttpRequestException>(() => agent.Process(new("synthetic", "Facturas", new string('1', 49), new(2026, 9, 12), null, [1])));
-        Assert.Equal(new[] { "ARCHIVO_ENVIADO_API", "FileTransportError type=HttpRequestException" }, events);
+        Assert.Equal(3, events.Count(e => e == "ARCHIVO_ENVIADO_API"));
+        Assert.Equal(3, events.Count(e => e.StartsWith("HttpTiming operation=files ms=", StringComparison.Ordinal) && e.EndsWith(" failed=true", StringComparison.Ordinal)));
+        Assert.DoesNotContain(events, e => e.Contains("private", StringComparison.Ordinal));
     }
     [Fact]
     public async Task LeaseFailureReportsHttpStatus()
@@ -41,7 +46,10 @@ public sealed class RemoteFileTraceTests
         using var client = new HttpClient(new Handler(409)) { BaseAddress = new Uri("https://fixture.invalid") };
         var agent = new RemoteOwnedExecution(client, new RemoteWorker.Claim("job", Guid.NewGuid(), 1), events.Add);
         Assert.False(await agent.Renew(CancellationToken.None));
-        Assert.Equal(new[] { "LeaseRenewalHttpStatus status=409" }, events);
+        Assert.Equal(2, events.Count);
+        Assert.StartsWith("HttpTiming operation=renew ms=", events[0]);
+        Assert.EndsWith(" status=409", events[0]);
+        Assert.Equal("LeaseRenewalHttpStatus status=409", events[1]);
     }
     private sealed class Handler(int status) : HttpMessageHandler
     {

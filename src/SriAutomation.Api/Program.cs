@@ -36,7 +36,9 @@ builder.Services.AddSingleton<IPanelDatabase>(_ => postgresConnection is null ? 
 builder.Services.AddSingleton<IStorageProvider>(services=>new DocumentStorage(output,()=>services.GetRequiredService<IStateRepository>().Read(s=>s.Settings.DownloadSubfolder)));
 builder.Services.AddSingleton<IDocumentParser, XmlDocumentParser>();
 if (postgresConnection is not null) builder.Services.AddSingleton<IZipJobStore>(new PostgresZipJobStore(postgresConnection));
-builder.Services.AddSingleton<DocumentZipService>();
+builder.Services.AddSingleton<DocumentZipService>(services => new DocumentZipService(
+    services.GetRequiredService<IStateRepository>(), services.GetRequiredService<IStorageProvider>(),
+    services.GetRequiredService<IZipJobStore>(), services.GetRequiredService<ILogger<DocumentZipService>>()));
 builder.Services.AddEndpointsApiExplorer(); builder.Services.AddSwaggerGen(); builder.Services.AddHealthChecks().AddCheck<SriAutomation.Api.StorageHealthCheck>("storage");
 builder.Services.AddRateLimiter(o => o.AddFixedWindowLimiter("login", x => { x.PermitLimit = 10; x.Window = TimeSpan.FromMinutes(1); x.QueueLimit = 0; }));
 builder.WebHost.ConfigureKestrel(o => o.Limits.MaxRequestBodySize = 20_000_000);

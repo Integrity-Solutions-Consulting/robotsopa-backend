@@ -80,6 +80,14 @@ public sealed class AccountingReconciliationTests : IDisposable
         var pdf = PdfFixture.BuildLines(["CLAVE DE ACCESO: " + Key]);
         var doc = pipeline.Process(new("a", "Facturas", Key, Issued, null, pdf));
         Assert.Null(doc.Subtotal); Assert.Null(doc.Discount); Assert.Null(doc.Taxes); Assert.Null(doc.Total);
+        Assert.Null(doc.Identification);
+        using (var book = new XLWorkbook(storage.Resolve(storage.Report("a", 2026, 9, [doc]))))
+        {
+            Assert.Equal("No disponible", book.Worksheet("Resumen").Cell(2, 8).GetString());
+            Assert.Equal("No disponible", book.Worksheet("Resumen").Cell(2, 10).GetString());
+            Assert.Contains("identificación", book.Worksheet("Pendientes").Cell(2, 3).GetString());
+            Assert.Contains("subtotal", book.Worksheet("Pendientes").Cell(2, 3).GetString());
+        }
         var state = new State();
         var job = new Execution { Query = new("a", Issued, Issued, ["Facturas"], "Stored") };
         state.Documents.Add(doc); state.Documents.Add(doc);

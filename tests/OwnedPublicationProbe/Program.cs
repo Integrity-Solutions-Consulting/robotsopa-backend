@@ -53,6 +53,28 @@ try
 }
 catch (InvalidOperationException) { }
 var newStore = new OwnedContentStore(storage, new OwnedStateRepository(postgres, second), second);
+// Only run this opt-in probe against a disposable database and output directory.
+if (args.Contains("--move-collision"))
+{
+var collisionBytes = System.Text.Encoding.UTF8.GetBytes("synthetic-move-collision-" + Guid.NewGuid().ToString("N"));
+var collisionHash = DownloadPipeline.Hash(collisionBytes);
+var collisionTarget = storage.Resolve(Path.Combine(".objects", collisionHash[..2], collisionHash + ".xml"));
+var collisionStage = "";
+var collisionStore = new OwnedContentStore(storage, new OwnedStateRepository(postgres, second), second, stage => {
+    collisionStage = stage;
+    if (stage == "PublishMove") Directory.CreateDirectory(collisionTarget);
+});
+try
+{
+    collisionStore.Publish(collisionBytes, "xml", (s, path, hash) => path);
+    throw new Exception("No se reprodujo el conflicto de destino.");
+}
+catch (IOException) when (collisionStage == "PublishMove") { }
+if (!Directory.Exists(collisionTarget) || !Directory.EnumerateFiles(storage.Resolve(Path.Combine(".staging", id)), "*.tmp", SearchOption.AllDirectories).Any()) throw new Exception("No se conservó el temporal de la prueba.");
+Directory.Delete(collisionTarget);
+var collisionRecovered = newStore.Publish(collisionBytes, "xml", (s, path, hash) => path);
+if (!File.ReadAllBytes(storage.Resolve(collisionRecovered)).AsSpan().SequenceEqual(collisionBytes)) throw new Exception("No se recuperó la publicación sintética.");
+}
 var current = newStore.Publish("second"u8.ToArray(), "xml", (s, path, hash) => { s.Executions.Single(e => e.Id == id).Checkpoint = path; return path; });
 if (original == current || File.ReadAllText(storage.Resolve(original)) != "first" || postgres.Read(s => s.Executions.Single(e => e.Id == id).Checkpoint) != current) throw new Exception("La publicación no conservó el objeto anterior o el manifiesto.");
 try

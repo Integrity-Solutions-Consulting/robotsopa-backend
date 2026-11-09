@@ -45,6 +45,14 @@ internal static class MonthlyXmlReport
         foreach (var d in rows)
         {
             var xml = ReadXml(d, resolve);
+            if (xml.Root is null && d.Status == "ValidadoXML")
+            {
+                var pending = book.Worksheet("Pendientes");
+                var pendingRow = (pending.LastRowUsed()?.RowNumber() ?? 1) + 1;
+                pending.Cell(pendingRow, 1).Value = d.Number ?? d.AccessKey;
+                pending.Cell(pendingRow, 2).Value = "XML no verificable";
+                pending.Cell(pendingRow, 3).Value = xml.Status;
+            }
             if (!totals.TryGetValue(d.Type, out var values)) totals[d.Type] = values = [];
             values.Add(xml.Parsed?.Total ?? d.Total);
             WriteCommon(summary, sr++, d, xml);

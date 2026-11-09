@@ -89,22 +89,21 @@ public sealed class SriExecutionEngine(IStateRepository repository, IDownloadPip
                             var transferIssues = new List<string>();
                             if (needXml) {
                                 xml = downloads.Pending(query.Account, type, row.Key, row.Issued, "xml");
-                                if (xml is null) try { xml = await portal.Download(row, "xml", cancellation); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga XML fallida."); }
+                                if (xml is null) try { var result = await portal.DownloadWithStatus(row, "xml", cancellation); xml = result.Bytes; if (result.State == DownloadControlState.Unavailable) transferIssues.Add("XML no disponible en la columna de la fila consultada."); else if (result.State == DownloadControlState.Unrecognized) transferIssues.Add("Control XML no reconocido; disponibilidad no confirmada."); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga XML fallida temporalmente."); } catch (InvalidDataException) { transferIssues.Add("Control XML ambiguo o descarga XML inválida."); }
                                 if (xml is not null) downloads.Preserve(query.Account, type, row.Key, row.Issued, "xml", xml);
                             }
                             if (needPdf) {
                                 pdf = downloads.Pending(query.Account, type, row.Key, row.Issued, "pdf");
-                                if (pdf is null) try { pdf = await portal.Download(row, "pdf", cancellation); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga PDF fallida."); }
+                                if (pdf is null) try { var result = await portal.DownloadWithStatus(row, "pdf", cancellation); pdf = result.Bytes; if (result.State == DownloadControlState.Unavailable) transferIssues.Add("PDF no disponible en la columna de la fila consultada."); else if (result.State == DownloadControlState.Unrecognized) transferIssues.Add("Control PDF no reconocido; disponibilidad no confirmada."); } catch (Exception ex) when (ex is IOException or TimeoutException) { transferIssues.Add("Descarga PDF fallida temporalmente."); } catch (InvalidDataException) { transferIssues.Add("Control PDF ambiguo o descarga PDF inválida."); }
                                 if (pdf is not null) downloads.Preserve(query.Account, type, row.Key, row.Issued, "pdf", pdf);
                             }
-                            if (needXml && xml is null && !transferIssues.Contains("Descarga XML fallida.")) transferIssues.Add("XML: no se identificó un control de descarga disponible en la fila.");
-                            if (needPdf && pdf is null && !transferIssues.Contains("Descarga PDF fallida.")) transferIssues.Add("PDF: no se identificó un control de descarga disponible en la fila.");
                             profile.TraceStep?.Invoke($"Timing downloadMs={downloadTimer.ElapsedMilliseconds}");
                             Stage("Processing");
                             var document = !HasNewFiles(xml, pdf) ? existing : downloads.Process(new(query.Account, type, row.Key, row.Issued, xml, pdf));
                             profile.TraceStep?.Invoke($"DownloadFilesProcessed xml={xml is not null} pdf={pdf is not null}");
                             if (transferIssues.Count > 0)
                             {
+                                errors++;
                                 repository.Update(s => {
                                     var e = s.Executions.Single(e => e.Id == execution.Id);
                                     e.Errors++;

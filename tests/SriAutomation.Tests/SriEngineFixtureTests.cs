@@ -9,6 +9,40 @@ namespace SriAutomation.Tests;
 
 public sealed class SriEngineFixtureTests
 {
+    [BrowserTheory]
+    [InlineData("missing", "XML no disponible")]
+    [InlineData("ambiguous", "Control XML ambiguo")]
+    [InlineData("failure", "Descarga XML fallida temporalmente")]
+    public async Task PartialXmlCasesPreservePdfAndContinue(string scenario, string expected)
+    {
+        var root = Path.Combine(Path.GetTempPath(), "sri-partial-fixture-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var repository = new JsonStateRepository(Path.Combine(root, "state"));
+            var storage = new DocumentStorage(Path.Combine(root, "out"));
+            var query = new Query("a", new(2026,9,12), new(2026,9,12), ["Facturas"]);
+            var job = repository.Update(s => { s.Accounts.Add(new("a", "Fixture", "1790000000001", true)); return Validation.Enqueue(s, query); });
+            var xmlControl = scenario switch { "missing" => "", "ambiguous" => "<button class=\"xml\">XML</button><button class=\"xml\">XML</button>", _ => "<button class=\"xml\">XML</button>" };
+            var html = Html.Replace("<table><tbody>", "<table><thead><tr><th>Clave</th><th>Fecha</th><th>XML</th><th>PDF</th></tr></thead><tbody>")
+                .Replace("<td><a class=\"xml\" href=\"/files/${key}.xml\" download>XML</a><a class=\"pdf\"", "<td>" + xmlControl + "</td><td><a class=\"pdf\"");
+            await using var server = await FixtureServer.Start(html);
+            using var playwright = await Playwright.CreateAsync(); await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
+            var page = await browser.NewPageAsync(); await page.GotoAsync(server.Url);
+            var profile = Profile(); profile.Url = server.Url; profile.TimeoutMs = 1500;
+            await new SriExecutionEngine(repository, new DownloadPipeline(repository, storage, new XmlDocumentParser())).Run(page, profile, job, "1790000000001", CancellationToken.None);
+            var state = repository.Read(s => s); var execution = state.Executions.Single();
+            Assert.True(execution.SriCheckpoint!.Complete); Assert.Equal(2, execution.Processed); Assert.Equal(2, execution.Errors);
+            Assert.Equal("ConErrores", execution.Queries.Single().Status); Assert.All(execution.Issues, i => Assert.Contains(expected, i));
+            Assert.Equal(2, server.Files); Assert.Equal(2, state.Documents.Count);
+            Assert.All(state.Documents, d => { Assert.Null(d.XmlPath); Assert.NotNull(d.PdfSha256); Assert.Null(d.Subtotal); Assert.Null(d.Total); Assert.Null(d.Identification); });
+            using var book = new ClosedXML.Excel.XLWorkbook(storage.Resolve(storage.Report("a", 2026, 9, state.Documents)));
+            Assert.Equal(3, book.Worksheet("Resumen").LastRowUsed()!.RowNumber());
+            Assert.Equal("No disponible", book.Worksheet("Resumen").Cell(2, 8).GetString());
+            Assert.Contains("identificación", book.Worksheet("Pendientes").Cell(2, 3).GetString());
+        }
+        finally { Directory.Delete(root, true); }
+    }
     [BrowserFact]
     public async Task ObservedEngineReachesRideClickFromRow()
     {
@@ -20,7 +54,7 @@ public sealed class SriEngineFixtureTests
         """;
         var root=Path.Combine(Path.GetTempPath(),"sri-observed-engine-"+Guid.NewGuid().ToString("N"));Directory.CreateDirectory(root);
         try {
-            var repository=new JsonStateRepository(root);var query=new Query("a",new(2026,9,12),new(2026,9,12),["Facturas"]);
+            var repository=new JsonStateRepository(root);var query=new Query("a",new(2026,9,12),new(2026,9,12),["Facturas"], Xml: false);
             var job=repository.Update(s=>{s.Accounts.Add(new("a","Fixture","1790000000001",true));return Validation.Enqueue(s,query);});
             await using var server=await FixtureServer.Start(Html);
             var fixtureHtml=html.Replace("RIDE_URL",server.Url.TrimEnd('/')+"/files/"+PhaseTwoTests.Key+".pdf");
@@ -81,7 +115,7 @@ public sealed class SriEngineFixtureTests
         var root=Path.Combine(Path.GetTempPath(),"sri-row-trace-"+Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
         try {
             var repository=new JsonStateRepository(root);
-            var query=new Query("a",new(2026,9,12),new(2026,9,12),["Facturas"]);
+            var query=new Query("a",new(2026,9,12),new(2026,9,12),["Facturas"], Xml: false);
             var job=repository.Update(s=>{s.Accounts.Add(new("a","Fixture","1790000000001",true));s.Documents.Add(new Voucher{Account="a",Type="Facturas",AccessKey=PhaseTwoTests.Key,Issued=new(2026,9,12)});return Validation.Enqueue(s,query);});
             await using var server=await FixtureServer.Start(Html);
             using var playwright=await Playwright.CreateAsync(); await using var browser=await playwright.Chromium.LaunchAsync(new(){Headless=true}); var page=await browser.NewPageAsync(); await page.GotoAsync(server.Url);
@@ -109,7 +143,7 @@ public sealed class SriEngineFixtureTests
         try
         {
             var repository = new JsonStateRepository(Path.Combine(root, "state")); var storage = new DocumentStorage(Path.Combine(root, "out"));
-            var query = new Query("a", new(2026, 9, 12), new(2026, 9, 12), ["Facturas"]);
+            var query = new Query("a", new(2026, 9, 12), new(2026, 9, 12), ["Facturas"], Xml: false);
             var job = repository.Update(s => { s.Accounts.Add(new("a", "Fixture", "1790000000001", true)); return Validation.Enqueue(s, query); });
             await using var server = await FixtureServer.Start(Html);
             using var playwright = await Playwright.CreateAsync(); await using var browser = await playwright.Chromium.LaunchAsync(new() { Headless = true });
@@ -147,7 +181,7 @@ public sealed class SriEngineFixtureTests
             var engine = new SriExecutionEngine(repository, new DownloadPipeline(repository, storage, new XmlDocumentParser()));
             await engine.Run(page, profile, first, "1790000000001", CancellationToken.None);
             var hashes = repository.Read(s => s.Documents.Select(d => d.PdfSha256).ToArray());
-            var second = repository.Update(s => Validation.Enqueue(s, query with { Xml = true }));
+            var second = repository.Update(s => { s.Executions.Single(e => e.Id == first.Id).Status = "Completed"; return Validation.Enqueue(s, query with { Xml = true }); });
             await engine.Run(page, profile, second, "1790000000001", CancellationToken.None);
             Assert.Equal(2, server.Files);
             Assert.Equal(hashes, repository.Read(s => s.Documents.Select(d => d.PdfSha256).ToArray()));

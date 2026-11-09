@@ -96,11 +96,11 @@ public sealed class MonthlyXmlReportTests
         try
         {
             var xml="<factura version='1.0.0'><infoTributaria><claveAcceso>123</claveAcceso></infoTributaria><infoFactura><fechaEmision>12/09/2026</fechaEmision><importeTotal>0.00</importeTotal></infoFactura></factura>";
-            var storage=new DocumentStorage(dir);var d=new XmlDocumentParser().ParseXml("account",Encoding.UTF8.GetBytes(xml));
+            var storage=new DocumentStorage(dir);var d=new XmlDocumentParser().ParseXml("account",Encoding.UTF8.GetBytes(xml)); d.Status = "ValidadoXML";
             var report=storage.Report("account",2026,9,[d]);
-            using(var book=new XLWorkbook(storage.Resolve(report))) Assert.Equal(14, book.Worksheet("Resumen").LastColumnUsed()!.ColumnNumber());
+            using(var book=new XLWorkbook(storage.Resolve(report))) { Assert.Equal(14, book.Worksheet("Resumen").LastColumnUsed()!.ColumnNumber()); Assert.Equal("XML no verificable", book.Worksheet("Pendientes").Cell(2, 2).GetString()); }
             d.XmlPath=storage.Save(d,"xml",Encoding.UTF8.GetBytes(xml));storage.Report("account",2026,9,[d]);
-            using(var book=new XLWorkbook(storage.Resolve(report))) {  Assert.Equal(0m,book.Worksheet("Resumen").Cell(2,10).GetValue<decimal>()); Assert.Equal("No consta en XML",book.Worksheet("Facturas").Cell(2,15).GetString()); }
+            using(var book=new XLWorkbook(storage.Resolve(report))) {  Assert.Equal(0m,book.Worksheet("Resumen").Cell(2,10).GetValue<decimal>()); Assert.Equal("No consta en XML",book.Worksheet("Facturas").Cell(2,15).GetString()); Assert.Equal(1, book.Worksheet("Pendientes").LastRowUsed()!.RowNumber()); }
             File.WriteAllText(storage.Resolve(d.XmlPath),"<broken");storage.Report("account",2026,9,[d]);
             using(var book=new XLWorkbook(storage.Resolve(report))) Assert.Equal(14, book.Worksheet("Resumen").LastColumnUsed()!.ColumnNumber());
         }

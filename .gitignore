@@ -70,3 +70,18 @@ desktop.ini
 # Bot installer outputs
 installer/publish/
 installer/output/
+
+# Salidas locales y paquetes generados
+/artifacts/
+/installer/output/
+/installer/output.zip
+**/.playwright/
+*.exe
+*.dll
+*.pdb
+*.so
+*.dylib
+*.tmp
+*.lock
+*.pdf
+*.xml

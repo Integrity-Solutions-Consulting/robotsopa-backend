@@ -97,7 +97,7 @@ public static class ObservedPortalProfile
     public static async Task<ILocator?> DownloadControl(ILocator row,string extension)
     {
         var matches=new List<ILocator>();foreach(var c in await row.Locator("a,button,input[type=submit],input[type=image]").AllAsync()) {
-            if(!await c.IsVisibleAsync())continue;
+            if(!await c.IsVisibleAsync() || await c.IsDisabledAsync())continue;
             var description=await c.EvaluateAsync<string>("e=>[e.innerText,e.getAttribute('title'),e.getAttribute('aria-label'),e.getAttribute('alt'),e.getAttribute('src'),e.getAttribute('href'),e.getAttribute('class'),...Array.from(e.querySelectorAll('img,span,i,svg')).flatMap(x=>[x.getAttribute('alt'),x.getAttribute('src'),x.getAttribute('title'),x.getAttribute('aria-label'),x.getAttribute('class')])].join(' ')");
             if(Regex.IsMatch(description,extension=="pdf"?@"(?<![a-z0-9])(pdf|ride)(?![a-z0-9])":@"(?<![a-z0-9])xml(?![a-z0-9])",RegexOptions.IgnoreCase | RegexOptions.CultureInvariant,TimeSpan.FromSeconds(1)))matches.Add(c);
         }
@@ -110,7 +110,7 @@ public static class ObservedPortalProfile
         if(headers.Count==cells.Count)for(var i=0;i<headers.Count;i++) {
             var label=Normal(headers[i]);
             if(!(extension=="pdf" ? label is "pdf" or "ride" : label=="xml"))continue;
-            foreach(var c in await cells[i].Locator("a,button,input[type=submit],input[type=image]").AllAsync())if(await c.IsVisibleAsync())candidates.Add(c);
+            foreach(var c in await cells[i].Locator("a,button,input[type=submit],input[type=image]").AllAsync())if(await c.IsVisibleAsync() && !await c.IsDisabledAsync())candidates.Add(c);
         }
         if(candidates.Count>1)throw new InvalidDataException("Hay varias descargas en la columna del formato.");
         return candidates.SingleOrDefault();

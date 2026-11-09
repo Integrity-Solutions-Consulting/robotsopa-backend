@@ -16,7 +16,8 @@ public class LoginIdentityTests
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "SriAutomation.sln"))) root = root.Parent;
         Assert.NotNull(root);
-        var apiDll = Path.Combine(root.FullName, "src", "SriAutomation.Api", "bin", "Debug", "net10.0", "SriAutomation.Api.dll");
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
+        var apiDll = Path.Combine(root.FullName, "src", "SriAutomation.Api", "bin", configuration, "net10.0", "SriAutomation.Api.dll");
         Assert.True(File.Exists(apiDll), "Compile la API antes de ejecutar esta prueba.");
         var directory = Path.Combine(Path.GetTempPath(), "sri-login-test-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(directory);
@@ -28,7 +29,7 @@ public class LoginIdentityTests
             db.SaveUser("admin", "admin", "admin-test-password");
             var listener = new TcpListener(IPAddress.Loopback, 0); listener.Start();
             var port = ((IPEndPoint)listener.LocalEndpoint).Port; listener.Stop();
-            var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = directory };
+            var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, CreateNoWindow = true, WorkingDirectory = directory, RedirectStandardOutput = true, RedirectStandardError = true };
             start.ArgumentList.Add(apiDll);
             start.Environment["ASPNETCORE_ENVIRONMENT"] = "Development";
             start.Environment["ASPNETCORE_URLS"] = $"http://127.0.0.1:{port}";
@@ -38,6 +39,8 @@ public class LoginIdentityTests
             start.Environment["SRI_ADMIN_USERNAME"] = "admin";
             start.Environment["SRI_ADMIN_PASSWORD"] = "cristopher-test-password";
             process = Process.Start(start)!;
+            var standardOutput = process.StandardOutput.ReadToEndAsync();
+            var standardError = process.StandardError.ReadToEndAsync();
             using var client = new HttpClient { BaseAddress = new Uri($"http://127.0.0.1:{port}") };
             var ready = false;
             for (var i = 0; i < 100 && !process.HasExited; i++)
@@ -46,7 +49,9 @@ public class LoginIdentityTests
                 catch (HttpRequestException) { }
                 await Task.Delay(100);
             }
-            Assert.True(ready, "La API de prueba no arrancó.");
+            if (!ready && process.HasExited)
+                Assert.Fail($"La API de prueba terminó con código {process.ExitCode}.\n{await standardError}\n{await standardOutput}");
+            Assert.True(ready, "La API de prueba no respondió en el puerto local antes del plazo.");
 
             async Task Check(string username, string password, string expectedUser, bool mustChange)
             {

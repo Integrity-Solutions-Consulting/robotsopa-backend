@@ -19,26 +19,9 @@ public sealed class DocumentStorage : IStorageProvider
     public void CheckAccess()
     {
         Directory.CreateDirectory(root);
-        CleanupStaging();
         var probe = Path.Combine(root, ".probe-" + Guid.NewGuid().ToString("N"));
         try { File.WriteAllText(probe, "ok"); if (File.ReadAllText(probe) != "ok") throw new IOException("Sin acceso de lectura."); }
         finally { if (File.Exists(probe)) File.Delete(probe); }
-    }
-    private void CleanupStaging()
-    {
-        if (!Directory.Exists(root)) return;
-        var cutoff = DateTime.UtcNow - TimeSpan.FromHours(24);
-        try
-        {
-            foreach (var file in Directory.EnumerateFiles(root, "*.tmp", SearchOption.AllDirectories))
-            {
-                try { if (File.GetLastWriteTimeUtc(file) < cutoff) File.Delete(file); }
-                catch (IOException) { }
-                catch (UnauthorizedAccessException) { }
-            }
-        }
-        catch (IOException) { }
-        catch (UnauthorizedAccessException) { }
     }
     public string Resolve(string relative)
     {
@@ -128,7 +111,18 @@ public sealed class DocumentStorage : IStorageProvider
         errors.Cell(1, 1).Value = "Número de comprobante"; errors.Cell(1, 2).Value = "Estado"; errors.Cell(1, 3).Value = "Motivo";
         row = 2;
         foreach (var d in rows.Where(d => d.Status != "ValidadoXML"))
-        { errors.Cell(row, 1).Value = d.Number; errors.Cell(row, 2).Value = d.Status; errors.Cell(row++, 3).Value = d.Warning; }
+        {
+            var missing = new List<string>();
+            if (string.IsNullOrWhiteSpace(d.Number)) missing.Add("número");
+            if (string.IsNullOrWhiteSpace(d.Authorization)) missing.Add("autorización");
+            if (string.IsNullOrWhiteSpace(d.AuthorizedAt)) missing.Add("fecha de autorización");
+            if (string.IsNullOrWhiteSpace(d.Recipient)) missing.Add("receptor");
+            if (string.IsNullOrWhiteSpace(d.Identification)) missing.Add("identificación");
+            if (!d.Subtotal.HasValue) missing.Add("subtotal");
+            if (!d.Total.HasValue) missing.Add("total");
+            errors.Cell(row, 1).Value = d.Number ?? d.AccessKey; errors.Cell(row, 2).Value = d.Status;
+            errors.Cell(row++, 3).Value = string.Join(" ", new[] { d.Warning, missing.Count == 0 ? null : "Sin evidencia: " + string.Join(", ", missing) + "." }.Where(x => !string.IsNullOrWhiteSpace(x)));
+        }
         foreach (var ws in book.Worksheets)
         {
             var used = ws.RangeUsed()!;

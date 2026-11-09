@@ -199,7 +199,7 @@ public static class RemoteExecutionEndpoints
                     if (rejectionCode is not null) throw new ArgumentException("Archivo fuera del trabajo autorizado.");
                     return true; });
                 var guarded = c.Request.Headers["X-SRI-Pending-Only-If-Missing-Or-Same"] == "1";
-                var document = new DownloadPipeline(scoped, storage, parser, new OwnedContentStore(storage, scoped, owner), value => stage = value, guarded).Process(file);
+                var document = new DownloadPipeline(scoped, storage, parser, new OwnedContentStore(storage, scoped, owner, value => stage = value), value => stage = value, guarded).Process(file);
                 stage = "DeliveryRequeue";
                 var deliveries = new RemoteDeliveryStore(connection);
                 var central = scoped.Update(s => s.Executions.Single(e => e.Id == id).CentralStorageAgent);
@@ -211,7 +211,7 @@ public static class RemoteExecutionEndpoints
             {
                 var category = ex is InvalidOperationException && ex.Message.StartsWith("Execution ownership", StringComparison.Ordinal) ? "Lease" : "Other";
                 c.Items["FileRejectionLogged"] = true;
-                app.Logger.LogWarning("Remote file failed: stage={Stage} category={Category} type={Type} code={Code}", stage, category, ex.GetType().Name, rejectionCode ?? FileRejectionDiagnostics.Code(stage, ex));
+                app.Logger.LogWarning("Remote file failed: stage={Stage} category={Category} type={Type} code={Code} hresult={HResult}", stage, category, ex.GetType().Name, rejectionCode ?? FileRejectionDiagnostics.Code(stage, ex), ex is IOException ? ex.HResult : (int?)null);
                 throw;
             }
         });

@@ -52,7 +52,7 @@ public sealed class OperatorIncidentHttpTests
     }
 
     [Fact]
-    public void IOExceptionTemporaryIsRetainedThenCleaned()
+    public void IOExceptionTemporaryIsRetainedDuringAccessCheck()
     {
         var root = Path.Combine(Path.GetTempPath(), "sri-temp-" + Guid.NewGuid().ToString("N")); Directory.CreateDirectory(root);
         try
@@ -61,7 +61,7 @@ public sealed class OperatorIncidentHttpTests
             var target = Path.Combine(root, "2026", "09-Septiembre", "a", "Facturas", PhaseTwoTests.Key + ".pdf"); Directory.CreateDirectory(target);
             Assert.Throws<IOException>(() => storage.Save(document, "pdf", PdfFixture.BuildLines(["CLAVE DE ACCESO: " + PhaseTwoTests.Key])));
             var temporary = Directory.GetFiles(Path.GetDirectoryName(target)!, "*.tmp").Single(); System.IO.File.SetLastWriteTimeUtc(temporary, DateTime.UtcNow.AddHours(-25));
-            storage.CheckAccess(); Assert.False(File.Exists(temporary)); Assert.True(Directory.Exists(target));
+            storage.CheckAccess(); Assert.True(File.Exists(temporary)); Assert.True(Directory.Exists(target));
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }
@@ -77,6 +77,11 @@ public sealed class OperatorIncidentHttpTests
             var pdf = PdfFixture.BuildLines(["CLAVE DE ACCESO: " + PhaseTwoTests.Key, "FECHA DE EMISION: 12/09/2026", "IMPORTE TOTAL: 11.50"]);
             var document = new DownloadPipeline(repo, new DocumentStorage(root), new XmlDocumentParser()).Process(new("a", "Facturas", PhaseTwoTests.Key, new(2026, 9, 12), null, pdf));
             Assert.Null(document.XmlPath); Assert.NotNull(document.PdfSha256); Assert.Equal("Revisar", document.Status); Assert.Single(state.Documents);
+            Assert.Null(document.Subtotal); Assert.Null(document.Identification);
+            var report = new DocumentStorage(root).Report("a", 2026, 9, [document]);
+            using var book = new ClosedXML.Excel.XLWorkbook(Path.Combine(root, report));
+            Assert.Equal("No disponible", book.Worksheet("Resumen").Cell(2, 8).GetString());
+            Assert.Contains("identificación", book.Worksheet("Pendientes").Cell(2, 3).GetString());
         }
         finally { if (Directory.Exists(root)) Directory.Delete(root, true); }
     }

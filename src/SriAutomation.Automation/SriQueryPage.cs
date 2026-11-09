@@ -7,6 +7,8 @@ using SriAutomation.Domain;
 namespace SriAutomation.Automation;
 
 public sealed record PortalRow(string Key, DateOnly Issued, ILocator Locator);
+public enum DownloadControlState { Available, Unavailable, Unrecognized }
+public sealed record DownloadResult(byte[]? Bytes, DownloadControlState State);
 public sealed class SriQueryPage(IPage page, PortalProfile profile)
 {
     public async Task Navigate(CancellationToken cancellation)
@@ -106,6 +108,8 @@ public sealed class SriQueryPage(IPage page, PortalProfile profile)
         } catch (PlaywrightException) { profile.TraceStep.Invoke("DownloadRowStructureError PlaywrightException"); }
     }
     public async Task<byte[]?> Download(PortalRow row, string extension, CancellationToken cancellation)
+        => (await DownloadWithStatus(row, extension, cancellation)).Bytes;
+    public async Task<DownloadResult> DownloadWithStatus(PortalRow row, string extension, CancellationToken cancellation)
     {
         if(profile.RuntimeObserved) {
             profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlChecking");
@@ -113,17 +117,19 @@ public sealed class SriQueryPage(IPage page, PortalProfile profile)
             try { observed=await ObservedPortalProfile.DownloadControl(row.Locator,extension); }
             catch (Exception ex) when (ex is InvalidDataException or PlaywrightException) { profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlError {ex.GetType().Name}"); throw; }
             if(observed is null){
-                profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlMissing");return null;
+                var missing = await MissingControlState(row, extension);
+                profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlMissing state={missing}");return new(null, missing);
             }
             profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlFound");
-            return await Transfer(observed);
+            return new(await Transfer(observed), DownloadControlState.Available);
         }
         var selector = extension == "xml" ? profile.Xml : profile.Pdf;
-        if (string.IsNullOrWhiteSpace(selector)) return null;
+        if (string.IsNullOrWhiteSpace(selector)) return new(null, DownloadControlState.Unrecognized);
         var control = row.Locator.Locator(selector);
-        if (await control.CountAsync() == 0 || !await control.IsVisibleAsync() || await control.IsDisabledAsync()) return null;
+        if (await control.CountAsync() == 0 || !await control.First.IsVisibleAsync() || await control.First.IsDisabledAsync()) return new(null, await MissingControlState(row, extension));
+        if (await control.CountAsync() != 1) throw new InvalidDataException("Hay varias descargas del mismo formato en la fila.");
         profile.TraceStep?.Invoke($"Download{extension.ToUpperInvariant()}ControlFound");
-        return await Transfer(control);
+        return new(await Transfer(control), DownloadControlState.Available);
         async Task<byte[]?> Transfer(ILocator control) {
         for (var attempt = 0; ; attempt++)
         {
@@ -147,5 +153,17 @@ public sealed class SriQueryPage(IPage page, PortalProfile profile)
             }
         }
         }
+    }
+    private static async Task<DownloadControlState> MissingControlState(PortalRow row, string extension)
+    {
+        // Only an explicitly identified, empty format column confirms absence for this observation.
+        var cells = await row.Locator.Locator(":scope > td").AllAsync();
+        var headers = await row.Locator.Locator("xpath=ancestor::table[1]").Locator("thead tr:last-child > th").AllTextContentsAsync();
+        if (headers.Count != cells.Count) return DownloadControlState.Unrecognized;
+        var indexes = Enumerable.Range(0, headers.Count).Where(i => string.Equals(headers[i].Trim(), extension, StringComparison.OrdinalIgnoreCase)).ToArray();
+        if (indexes.Length != 1) return DownloadControlState.Unrecognized;
+        var cell = cells[indexes[0]];
+        if (await cell.Locator("a,button,input,[role=button],img,svg").CountAsync() != 0 || !string.IsNullOrWhiteSpace(await cell.InnerTextAsync())) return DownloadControlState.Unrecognized;
+        return DownloadControlState.Unavailable;
     }
 }

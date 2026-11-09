@@ -6,6 +6,18 @@ namespace SriAutomation.Tests;
 public sealed class RuntimeWorkflowTests
 {
     [BrowserFact]
+    public async Task EmptyXmlColumnAndUnknownControlAreDistinct()
+    {
+        using var playwright=await Playwright.CreateAsync(); await using var browser=await playwright.Chromium.LaunchAsync(new(){Headless=true, ExecutablePath=Environment.GetEnvironmentVariable("SRI_TEST_CHROMIUM")});
+        var page=await browser.NewPageAsync();
+        var profile=new PortalProfile{RuntimeObserved=true};
+        await page.SetContentAsync("<table><thead><tr><th>XML</th><th>PDF</th></tr></thead><tbody><tr><td></td><td><button>PDF</button></td></tr></tbody></table>");
+        var query=new SriQueryPage(page,profile); var row=new PortalRow(new string('1',49),new DateOnly(2026,1,1),page.Locator("tbody tr"));
+        Assert.Equal(DownloadControlState.Unavailable,(await query.DownloadWithStatus(row,"xml",CancellationToken.None)).State);
+        await page.Locator("tbody td").First.EvaluateAsync("e=>e.innerHTML='<button>?</button>'");
+        Assert.Equal(DownloadControlState.Unrecognized,(await query.DownloadWithStatus(row,"xml",CancellationToken.None)).State);
+    }
+    [BrowserFact]
     public async Task FormatHeadersIdentifyOnlyUniqueControlsAndDiagnosticsExcludePrivateValues()
     {
         using var playwright=await Playwright.CreateAsync(); await using var browser=await playwright.Chromium.LaunchAsync(new(){Headless=true});
